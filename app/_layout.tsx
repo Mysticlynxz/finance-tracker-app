@@ -1,24 +1,86 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
+import "./global.css";
+import { type Href, Redirect, Stack, useSegments } from "expo-router";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, LogBox, Text, View } from "react-native";
+import { ExpenseProvider } from "../Context/ExpenseContext";
+import { getCurrentUser } from "../lib/appwrite";
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
+LogBox.ignoreLogs([
+  "SafeAreaView has been deprecated and will be removed in a future release. Please use 'react-native-safe-area-context' instead.",
+]);
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+type SessionState = "loading" | "authenticated" | "unauthenticated";
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
+const LOGIN_ROUTE = "/login" as Href;
+const HOME_ROUTE = "/home" as Href;
+
+function SessionLoadingScreen() {
+  return (
+    <View className="flex-1 items-center justify-center bg-slate-100 px-6">
+      <ActivityIndicator size="large" color="#2563eb" />
+      <Text className="mt-4 text-base font-medium text-slate-600">Checking session...</Text>
+    </View>
+  );
+}
+
+export default function Layout() {
+  const segments = useSegments();
+  const [sessionState, setSessionState] = useState<SessionState>("loading");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const checkSession = async () => {
+      try {
+        await getCurrentUser();
+        if (isMounted) {
+          setSessionState("authenticated");
+        }
+      } catch {
+        if (isMounted) {
+          setSessionState("unauthenticated");
+        }
+      }
+    };
+
+    void checkSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const currentSegment = segments[0] as string | undefined;
+  const isAuthRoute = currentSegment === "login" || currentSegment === "register";
+  const isTabsRoute = currentSegment === "(tabs)";
+
+  if (sessionState === "loading") {
+    return (
+      <ExpenseProvider>
+        <SessionLoadingScreen />
+      </ExpenseProvider>
+    );
+  }
+
+  if (sessionState === "authenticated" && !isTabsRoute && !isAuthRoute) {
+    return (
+      <ExpenseProvider>
+        <Redirect href={HOME_ROUTE} />
+      </ExpenseProvider>
+    );
+  }
+
+  if (sessionState === "unauthenticated" && !isAuthRoute && !isTabsRoute) {
+    return (
+      <ExpenseProvider>
+        <Redirect href={LOGIN_ROUTE} />
+      </ExpenseProvider>
+    );
+  }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <ExpenseProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </ExpenseProvider>
   );
 }
