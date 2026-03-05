@@ -36,7 +36,7 @@ Give short, practical financial advice.
 
         const data = await response.json();
 
-        log("Gemini response:", JSON.stringify(data));
+        log("Gemini response: " + JSON.stringify(data));
 
         const reply =
             data?.candidates?.[0]?.content?.parts?.[0]?.text ||
@@ -44,7 +44,7 @@ Give short, practical financial advice.
 
         return res.json({ reply });
     } catch (err) {
-        error("Function error:", err);
+        error("Function error: " + err.message);
 
         return res.json({
             reply: "AI advisor encountered an error.",
