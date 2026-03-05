@@ -1,4 +1,4 @@
-﻿import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { useCallback, useContext, useEffect, useState } from "react";
@@ -204,13 +204,28 @@ export default function Home() {
         contentContainerStyle={{ paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
       >
-      <View className="mb-6">
-        <Text className="text-3xl font-extrabold" style={{ color: colors.primary }}>
-          Dashboard
-        </Text>
-        <Text className="mt-1 text-base" style={{ color: colors.secondary }}>
-          Keep your spending on track.
-        </Text>
+      <View className="mb-6 flex-row items-start justify-between">
+        <View>
+          <Text className="text-3xl font-extrabold" style={{ color: colors.primary }}>
+            Dashboard
+          </Text>
+          <Text className="mt-1 text-base" style={{ color: colors.secondary }}>
+            Keep your spending on track.
+          </Text>
+        </View>
+        <Pressable
+          onPress={() => router.push("/advisor")}
+          className="h-11 w-11 items-center justify-center rounded-full"
+          style={{ backgroundColor: colors.subtle }}
+          accessibilityRole="button"
+          accessibilityLabel="Open AI Financial Advisor"
+        >
+          <Ionicons
+            name="sparkles-outline"
+            size={20}
+            color={isDarkMode ? "#60a5fa" : "#2563eb"}
+          />
+        </Pressable>
       </View>
 
       <View

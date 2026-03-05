@@ -13,6 +13,7 @@ type SessionState = "loading" | "authenticated" | "unauthenticated";
 
 const LOGIN_ROUTE = "/login" as Href;
 const HOME_ROUTE = "/home" as Href;
+const ADVISOR_ROUTE_SEGMENT = "advisor";
 
 function SessionLoadingScreen() {
   return (
@@ -53,6 +54,7 @@ export default function Layout() {
   const currentSegment = segments[0] as string | undefined;
   const isAuthRoute = currentSegment === "login" || currentSegment === "register";
   const isTabsRoute = currentSegment === "(tabs)";
+  const isAdvisorRoute = currentSegment === ADVISOR_ROUTE_SEGMENT;
 
   if (sessionState === "loading") {
     return (
@@ -62,7 +64,7 @@ export default function Layout() {
     );
   }
 
-  if (sessionState === "authenticated" && !isTabsRoute && !isAuthRoute) {
+  if (sessionState === "authenticated" && !isTabsRoute && !isAuthRoute && !isAdvisorRoute) {
     return (
       <ExpenseProvider>
         <Redirect href={HOME_ROUTE} />

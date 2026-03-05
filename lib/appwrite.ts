@@ -1,10 +1,23 @@
-import { Account, AppwriteException, Client, Databases, ID, Models, Query } from "appwrite";
+import {
+  Account,
+  AppwriteException,
+  Client,
+  Databases,
+  ExecutionMethod,
+  Functions,
+  ID,
+  Models,
+  Query,
+} from "appwrite";
 
 const APPWRITE_ENDPOINT = "https://cloud.appwrite.io/v1";
 const APPWRITE_PROJECT_ID = "69a4662b001f58493387";
 const APPWRITE_DATABASE_ID = "69a4e415003c658fe722";
 const APPWRITE_EXPENSES_COLLECTION_ID = "expenses";
 const APPWRITE_BUDGETS_COLLECTION_ID = "budgets";
+const APPWRITE_AI_ADVISOR_FUNCTION_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_AI_ADVISOR_FUNCTION_ID ?? "ai-advisor";
+const AI_ADVISOR_UNAVAILABLE_MESSAGE = "Sorry, the AI advisor is currently unavailable.";
 
 const client = new Client()
   .setEndpoint(APPWRITE_ENDPOINT)
@@ -12,6 +25,7 @@ const client = new Client()
 
 export const account = new Account(client);
 export const databases = new Databases(client);
+export const functions = new Functions(client);
 
 const getErrorMessage = (error: unknown) => {
   if (error instanceof AppwriteException) {
@@ -219,5 +233,44 @@ export const getBudget = async (): Promise<number | null> => {
     const message = getErrorMessage(error);
     console.error("[Appwrite] getBudget failed:", message);
     throw new Error(message);
+  }
+};
+
+export const askFinancialAdvisor = async (message: string): Promise<string> => {
+  const trimmedMessage = message.trim();
+
+  if (!trimmedMessage) {
+    return AI_ADVISOR_UNAVAILABLE_MESSAGE;
+  }
+
+  try {
+    const execution = await functions.createExecution({
+      functionId: APPWRITE_AI_ADVISOR_FUNCTION_ID,
+      body: JSON.stringify({ message: trimmedMessage }),
+      async: false,
+      method: ExecutionMethod.POST,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!execution.responseBody) {
+      return AI_ADVISOR_UNAVAILABLE_MESSAGE;
+    }
+
+    const parsedResponse = JSON.parse(execution.responseBody) as { reply?: unknown };
+
+    const reply =
+      typeof parsedResponse.reply === "string" ? parsedResponse.reply : "";
+
+    if (!reply.trim()) {
+      return AI_ADVISOR_UNAVAILABLE_MESSAGE;
+    }
+
+    return reply;
+  } catch (error) {
+    const message = getErrorMessage(error);
+    console.error("[Appwrite] askFinancialAdvisor failed:", message);
+    return AI_ADVISOR_UNAVAILABLE_MESSAGE;
   }
 };
