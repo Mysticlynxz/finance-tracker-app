@@ -15,8 +15,7 @@ const APPWRITE_PROJECT_ID = "69a4662b001f58493387";
 const APPWRITE_DATABASE_ID = "69a4e415003c658fe722";
 const APPWRITE_EXPENSES_COLLECTION_ID = "expenses";
 const APPWRITE_BUDGETS_COLLECTION_ID = "budgets";
-const APPWRITE_AI_ADVISOR_FUNCTION_ID =
-  process.env.EXPO_PUBLIC_APPWRITE_AI_ADVISOR_FUNCTION_ID ?? "ai-advisor";
+const APPWRITE_AI_ADVISOR_FUNCTION_ID ="69a76eab00275ef10835";
 const AI_ADVISOR_UNAVAILABLE_MESSAGE = "Sorry, the AI advisor is currently unavailable.";
 
 const client = new Client()

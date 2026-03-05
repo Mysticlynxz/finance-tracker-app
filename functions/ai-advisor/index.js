@@ -2,12 +2,14 @@ import fetch from "node-fetch";
 
 export default async ({ req, res }) => {
     try {
-        const body = JSON.parse(req.body || "{}");
+        // Fix: safely parse request body
+        const body =
+            typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+
         const message = body.message || "Hello";
 
         const prompt = `
 You are a helpful financial advisor inside a budgeting app.
-
 The user is asking about their expenses and budgeting.
 
 User message:
@@ -21,15 +23,15 @@ Give short, practical financial advice.
             {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
                     contents: [
                         {
-                            parts: [{ text: prompt }]
-                        }
-                    ]
-                })
+                            parts: [{ text: prompt }],
+                        },
+                    ],
+                }),
             }
         );
 
@@ -40,10 +42,11 @@ Give short, practical financial advice.
             "Sorry, I couldn't generate advice.";
 
         return res.json({ reply });
-
     } catch (error) {
+        console.error(error);
+
         return res.json({
-            reply: "AI advisor encountered an error."
+            reply: "AI advisor encountered an error.",
         });
     }
 };
