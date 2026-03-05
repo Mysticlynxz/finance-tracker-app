@@ -1,8 +1,7 @@
 import fetch from "node-fetch";
 
-export default async ({ req, res }) => {
+export default async ({ req, res, log, error }) => {
     try {
-        // Fix: safely parse request body
         const body =
             typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
 
@@ -37,13 +36,15 @@ Give short, practical financial advice.
 
         const data = await response.json();
 
+        log("Gemini response:", JSON.stringify(data));
+
         const reply =
             data?.candidates?.[0]?.content?.parts?.[0]?.text ||
             "Sorry, I couldn't generate advice.";
 
         return res.json({ reply });
-    } catch (error) {
-        console.error(error);
+    } catch (err) {
+        error("Function error:", err);
 
         return res.json({
             reply: "AI advisor encountered an error.",
