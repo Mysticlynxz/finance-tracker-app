@@ -5,7 +5,7 @@ const NO_RESPONSE_FALLBACK =
 const ERROR_FALLBACK =
   "Track your expenses daily and avoid unnecessary purchases to improve savings.";
 const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-latest:generateContent";
 
 const parseRequestBody = (req) => {
   const rawBody = req?.body ?? req?.bodyText ?? {};
