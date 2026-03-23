@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext, SUPPORTED_CURRENCIES } from "../../Context/ExpenseContext";
-import { logoutUser } from "../../lib/appwrite";
+import { logoutUser, resetAllData } from "../../lib/appwrite";
 
 const LOGIN_ROUTE = "/login" as Href;
 
@@ -20,17 +20,19 @@ export default function SettingsScreen() {
   const {
     budget,
     expenses,
-    clearExpenses,
+    clearExpenses: clearLocalExpenses,
     isDarkMode,
     setIsDarkMode,
     currency,
     setCurrency,
+    setBudget: setLocalBudget,
     isFetchingRates,
     fetchExchangeRates,
     formatAmount,
   } = useContext(ExpenseContext);
   const [isCurrencyMenuOpen, setIsCurrencyMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isResettingData, setIsResettingData] = useState(false);
 
   const colors = isDarkMode
     ? {
@@ -60,16 +62,42 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleClearExpenses = () => {
+  const performResetData = async () => {
+    if (isResettingData) {
+      return;
+    }
+
+    setIsResettingData(true);
+
+    try {
+      await resetAllData();
+      clearLocalExpenses();
+      setLocalBudget(0);
+      Alert.alert("Reset complete", "All expenses and budget data have been deleted.", [
+        {
+          text: "OK",
+          onPress: () => router.replace("/home"),
+        },
+      ]);
+    } catch (resetError) {
+      const message =
+        resetError instanceof Error ? resetError.message : "Unable to reset data right now.";
+      Alert.alert("Reset failed", message);
+    } finally {
+      setIsResettingData(false);
+    }
+  };
+
+  const handleResetData = () => {
     Alert.alert(
-      "Clear all expenses",
-      "This will remove all saved expenses from the current app session.",
+      "Reset Data",
+      "Are you sure you want to delete all expenses and budget?",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Clear",
+          text: "Yes",
           style: "destructive",
-          onPress: () => clearExpenses(),
+          onPress: () => void performResetData(),
         },
       ]
     );
@@ -261,14 +289,22 @@ export default function SettingsScreen() {
             Data
           </Text>
           <Text className="mb-3 text-sm" style={{ color: colors.secondary }}>
-            Saved expenses in session: {expenses.length}
+            Synced expenses available locally: {expenses.length}
           </Text>
           <Pressable
-            onPress={handleClearExpenses}
+            onPress={handleResetData}
+            disabled={isResettingData}
             className="flex-row items-center justify-center gap-2 rounded-xl bg-red-600 py-3"
+            style={isResettingData ? { opacity: 0.8 } : undefined}
           >
-            <Ionicons name="trash-outline" size={18} color="#ffffff" />
-            <Text className="font-semibold text-white">Clear All Expenses</Text>
+            {isResettingData ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Ionicons name="trash-outline" size={18} color="#ffffff" />
+            )}
+            <Text className="font-semibold text-white">
+              {isResettingData ? "Resetting..." : "Reset All Data"}
+            </Text>
           </Pressable>
         </View>
 

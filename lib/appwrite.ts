@@ -74,6 +74,8 @@ export interface BudgetDocument extends Models.Document {
   userId: string;
 }
 
+const RESET_BATCH_SIZE = 100;
+
 const parseNumericAmount = (value: unknown, fieldName: string) => {
   const numericValue = Number(value);
 
@@ -83,6 +85,37 @@ const parseNumericAmount = (value: unknown, fieldName: string) => {
   }
 
   return numericValue;
+};
+
+const deleteUserDocuments = async (collectionId: string): Promise<number> => {
+  const user = await getCurrentUser();
+  let deletedCount = 0;
+
+  while (true) {
+    const response = await databases.listDocuments({
+      databaseId: APPWRITE_DATABASE_ID,
+      collectionId,
+      queries: [Query.equal("userId", user.$id), Query.limit(RESET_BATCH_SIZE)],
+    });
+
+    if (response.documents.length === 0) {
+      break;
+    }
+
+    await Promise.all(
+      response.documents.map((document) =>
+        databases.deleteDocument({
+          databaseId: APPWRITE_DATABASE_ID,
+          collectionId,
+          documentId: document.$id,
+        })
+      )
+    );
+
+    deletedCount += response.documents.length;
+  }
+
+  return deletedCount;
 };
 
 export const registerUser = async ({
@@ -190,6 +223,16 @@ export const getExpenses = async (): Promise<ExpenseDocument[]> => {
   }
 };
 
+export const clearExpenses = async (): Promise<number> => {
+  try {
+    return await deleteUserDocuments(APPWRITE_EXPENSES_COLLECTION_ID);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    console.error("[Appwrite] clearExpenses failed:", message);
+    throw new Error(message);
+  }
+};
+
 export const setBudget = async (
   input: SetBudgetInput
 ): Promise<Models.Document> => {
@@ -257,6 +300,27 @@ export const getBudget = async (): Promise<number | null> => {
   } catch (error) {
     const message = getErrorMessage(error);
     console.error("[Appwrite] getBudget failed:", message);
+    throw new Error(message);
+  }
+};
+
+export const clearBudget = async (): Promise<number> => {
+  try {
+    return await deleteUserDocuments(APPWRITE_BUDGETS_COLLECTION_ID);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    console.error("[Appwrite] clearBudget failed:", message);
+    throw new Error(message);
+  }
+};
+
+export const resetAllData = async (): Promise<void> => {
+  try {
+    await clearExpenses();
+    await clearBudget();
+  } catch (error) {
+    const message = getErrorMessage(error);
+    console.error("[Appwrite] resetAllData failed:", message);
     throw new Error(message);
   }
 };
