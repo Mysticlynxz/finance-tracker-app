@@ -1,6 +1,6 @@
 import { Link, router } from "expo-router";
 import { useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loginUser } from "../lib/appwrite";
 
@@ -19,7 +19,10 @@ export default function LoginScreen() {
 
       router.replace("/home");
     } catch (error) {
-      console.error(error);
+      const message =
+        error instanceof Error ? error.message : "Unable to sign in. Please try again.";
+
+      Alert.alert("Login failed", message);
     }
   };
 

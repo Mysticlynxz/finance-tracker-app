@@ -17,6 +17,9 @@ const APPWRITE_EXPENSES_COLLECTION_ID = "expenses";
 const APPWRITE_BUDGETS_COLLECTION_ID = "budgets";
 const APPWRITE_AI_ADVISOR_FUNCTION_ID ="69a76eab00275ef10835";
 const AI_ADVISOR_UNAVAILABLE_MESSAGE = "Sorry, the AI advisor is currently unavailable.";
+const PROJECT_PAUSED_ERROR_TEXT = "Project is paused due to inactivity";
+const PROJECT_PAUSED_RECOVERY_MESSAGE =
+  "The backend is paused due to inactivity. Open Appwrite Console and restore this project, then try again.";
 
 const client = new Client()
   .setEndpoint(APPWRITE_ENDPOINT)
@@ -27,11 +30,11 @@ export const databases = new Databases(client);
 export const functions = new Functions(client);
 
 const getErrorMessage = (error: unknown) => {
-  if (error instanceof AppwriteException) {
-    return error.message;
-  }
+  if (error instanceof AppwriteException || error instanceof Error) {
+    if (error.message.includes(PROJECT_PAUSED_ERROR_TEXT)) {
+      return PROJECT_PAUSED_RECOVERY_MESSAGE;
+    }
 
-  if (error instanceof Error) {
     return error.message;
   }
 
@@ -111,7 +114,6 @@ export const getCurrentUser = async (): Promise<Models.User<Models.Preferences>>
     return await account.get();
   } catch (error) {
     const message = getErrorMessage(error);
-    console.error("[Appwrite] getCurrentUser failed:", message);
     throw new Error(message);
   }
 };
