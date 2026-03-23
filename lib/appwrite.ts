@@ -12,7 +12,7 @@ import {
 
 const APPWRITE_ENDPOINT = "https://cloud.appwrite.io/v1";
 const APPWRITE_PROJECT_ID = "69a4662b001f58493387";
-const APPWRITE_DATABASE_ID = "69a4e415003c658fe722";
+export const APPWRITE_DATABASE_ID = "69a4e415003c658fe722";
 const APPWRITE_EXPENSES_COLLECTION_ID = "expenses";
 const APPWRITE_BUDGETS_COLLECTION_ID = "budgets";
 const APPWRITE_AI_ADVISOR_FUNCTION_ID ="69a76eab00275ef10835";
@@ -29,7 +29,7 @@ export const account = new Account(client);
 export const databases = new Databases(client);
 export const functions = new Functions(client);
 
-const getErrorMessage = (error: unknown) => {
+export const getErrorMessage = (error: unknown) => {
   if (error instanceof AppwriteException || error instanceof Error) {
     if (error.message.includes(PROJECT_PAUSED_ERROR_TEXT)) {
       return PROJECT_PAUSED_RECOVERY_MESSAGE;
