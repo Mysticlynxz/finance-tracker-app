@@ -60,18 +60,6 @@ const getHeader = (req, headerName) => {
   return "";
 };
 
-const formatAmount = (value) => {
-  const numericValue = Number(value);
-
-  if (!Number.isFinite(numericValue)) {
-    return "0";
-  }
-
-  return Number.isInteger(numericValue)
-    ? numericValue.toString()
-    : numericValue.toFixed(2);
-};
-
 const createAppwriteClient = (req) => {
   const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
 
@@ -133,19 +121,18 @@ const getFinancialContext = async (req, log) => {
     }),
   ]);
 
+  log("Raw expenses from DB: " + JSON.stringify(expenseResponse.documents));
+
   const expenses = expenseResponse.documents.map((expense) => ({
     category:
       typeof expense.category === "string" && expense.category.trim()
         ? expense.category.trim()
         : "Others",
-    amount: Number.isFinite(Number(expense.amount)) ? Number(expense.amount) : 0,
+    amount: expense.amount,
   }));
 
   const budgetDocument = budgetResponse.documents[0] ?? null;
-  const budget =
-    budgetDocument && Number.isFinite(Number(budgetDocument.amount))
-      ? Number(budgetDocument.amount)
-      : null;
+  const budget = budgetDocument ? budgetDocument.amount : null;
 
   log("Fetched expenses: " + JSON.stringify(expenses));
   log("Fetched budget: " + JSON.stringify(budget));
@@ -196,12 +183,12 @@ export default async ({ req, res, log, error }) => {
         ? expenses
             .map(
               (expense) =>
-                `${expense.category}: ${RUPEE_SYMBOL}${formatAmount(expense.amount)}`
+                `${expense.category}: ${RUPEE_SYMBOL}${Number(expense.amount)}`
             )
             .join("\n")
         : "No recent expenses found.";
     const budgetLine =
-      budget === null ? "Not set" : `${RUPEE_SYMBOL}${formatAmount(budget)}`;
+      budget === null ? "Not set" : `${RUPEE_SYMBOL}${Number(budget)}`;
     const prompt = `
 You are a smart financial advisor inside a budgeting app.
 
