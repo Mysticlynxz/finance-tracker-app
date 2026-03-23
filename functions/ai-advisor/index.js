@@ -1,8 +1,11 @@
 import fetch from "node-fetch";
 
-const FALLBACK_ADVICE =
-  "Try reducing unnecessary expenses and saving regularly.";
-const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const NO_RESPONSE_FALLBACK =
+  "Try reducing unnecessary expenses and tracking your daily spending.";
+const ERROR_FALLBACK =
+  "Track your expenses daily and avoid unnecessary purchases to improve savings.";
+const GEMINI_ENDPOINT =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
 
 const parseRequestBody = (req) => {
   const rawBody = req?.body ?? req?.bodyText ?? {};
@@ -30,37 +33,29 @@ export default async ({ req, res, log, error }) => {
         ? body.message.trim()
         : "Give one practical budgeting tip.";
 
-    const apiKey = process.env.OPENROUTER_API_KEY?.trim();
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
 
     if (!apiKey) {
-      error("OPENROUTER_API_KEY is missing.");
-      return res.json({ reply: FALLBACK_ADVICE });
+      throw new Error("GEMINI_API_KEY is missing.");
     }
 
-    if (!apiKey.startsWith("sk-or-")) {
-      error("OPENROUTER_API_KEY is invalid. Expected a key starting with sk-or-.");
-      return res.json({ reply: FALLBACK_ADVICE });
-    }
+    const prompt =
+      "You are a helpful financial advisor. Give short, practical advice.\n\nUser: " +
+      message;
 
-    const response = await fetch(OPENROUTER_ENDPOINT, {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "http://localhost",
-        "X-Title": "Finance Tracker App",
       },
       body: JSON.stringify({
-        model: "mistralai/mistral-7b-instruct:free",
-        messages: [
+        contents: [
           {
-            role: "system",
-            content:
-              "You are a helpful financial advisor. Give short, practical advice.",
-          },
-          {
-            role: "user",
-            content: message,
+            parts: [
+              {
+                text: prompt,
+              },
+            ],
           },
         ],
       }),
@@ -72,27 +67,32 @@ export default async ({ req, res, log, error }) => {
     try {
       data = rawResponse ? JSON.parse(rawResponse) : {};
     } catch {
-      error("Failed to parse OpenRouter response JSON: " + rawResponse);
+      throw new Error("Failed to parse Gemini response JSON: " + rawResponse);
     }
 
-    log("OpenRouter response: " + JSON.stringify(data));
+    log("Gemini response: " + JSON.stringify(data));
 
-    if (response.status !== 200) {
-      error(`OpenRouter API error (${response.status}): ${JSON.stringify(data)}`);
-      return res.json({ reply: FALLBACK_ADVICE });
+    if (!response.ok) {
+      error(`Gemini API error (${response.status}): ${JSON.stringify(data)}`);
+      return res.json({
+        reply: ERROR_FALLBACK,
+      });
     }
 
-    const reply = data?.choices?.[0]?.message?.content;
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!reply || typeof reply !== "string" || !reply.trim()) {
       return res.json({
-        reply: FALLBACK_ADVICE,
+        reply: NO_RESPONSE_FALLBACK,
       });
     }
 
     return res.json({ reply: reply.trim() });
   } catch (err) {
-    error("Function error: " + (err?.message || String(err)));
-    return res.json({ reply: FALLBACK_ADVICE });
+    error("Gemini error: " + (err?.message || String(err)));
+
+    return res.json({
+      reply: ERROR_FALLBACK,
+    });
   }
 };
