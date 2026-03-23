@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -22,7 +22,7 @@ const mapCategoryDocument = (category: { name: string; icon: string }): Category
 });
 
 export default function AddExpense() {
-  const { isDarkMode, currency, addExpense } = useContext(ExpenseContext);
+  const { isDarkMode, currency, addExpense, normalizeAmountToUSD } = useContext(ExpenseContext);
   const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<CategoryOption | null>(null);
   const [amount, setAmount] = useState("");
@@ -31,6 +31,7 @@ export default function AddExpense() {
   const [isCustomCategoryModalVisible, setIsCustomCategoryModalVisible] = useState(false);
   const [isSavingExpense, setIsSavingExpense] = useState(false);
   const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const isSubmittingExpenseRef = useRef(false);
 
   const colors = isDarkMode
     ? {
@@ -105,31 +106,45 @@ export default function AddExpense() {
       return;
     }
 
-    const parsedAmount = Number.parseFloat(amount);
+    if (isSubmittingExpenseRef.current) {
+      console.warn("[Expenses] Duplicate add expense tap ignored.");
+      return;
+    }
+
+    const parsedAmount = Number(amount);
 
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       Alert.alert("Invalid amount", "Please enter a valid amount greater than 0.");
       return;
     }
 
+    isSubmittingExpenseRef.current = true;
     setIsSavingExpense(true);
 
     try {
       const date = new Date().toISOString();
+      const normalizedAmount = Number(await normalizeAmountToUSD(parsedAmount));
+
+      if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+        throw new Error("Expense amount could not be normalized.");
+      }
+
+      console.log("Adding expense:", parsedAmount);
 
       await createExpense({
-        amount: parsedAmount,
+        amount: Number(normalizedAmount),
         category: selectedCategory.name,
         date,
       });
 
-      addExpense(parsedAmount, selectedCategory.name);
+      addExpense(normalizedAmount, selectedCategory.name);
       closeExpenseModal();
-      router.push("/home");
+      router.replace("/home");
     } catch (error) {
       console.error(error);
       Alert.alert("Save failed", "Unable to save expense. Please try again.");
     } finally {
+      isSubmittingExpenseRef.current = false;
       setIsSavingExpense(false);
     }
   };
@@ -243,7 +258,7 @@ export default function AddExpense() {
 
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={() => router.push("/home")}
+          onPress={() => router.replace("/home")}
           className="mt-3 items-center rounded-xl border py-4"
           style={{ backgroundColor: colors.card, borderColor: colors.border }}
         >

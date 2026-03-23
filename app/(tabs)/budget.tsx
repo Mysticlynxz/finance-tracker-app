@@ -7,7 +7,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { setBudget } from "../../lib/appwrite";
 
 export default function Budget() {
-  const { setBudget: setBudgetLocal, isDarkMode, currency, formatAmount, budget } =
+  const {
+    setBudget: setBudgetLocal,
+    isDarkMode,
+    currency,
+    formatAmount,
+    budget,
+    normalizeAmountToUSD,
+  } =
     useContext(ExpenseContext);
   const [value, setValue] = useState("");
   const colors = isDarkMode
@@ -40,10 +47,16 @@ export default function Budget() {
     }
 
     try {
-      await setBudget({ amount: parsedBudget });
+      const normalizedBudget = Number(await normalizeAmountToUSD(parsedBudget));
 
-      setBudgetLocal(parsedBudget);
-      router.push("/home");
+      if (!Number.isFinite(normalizedBudget) || normalizedBudget <= 0) {
+        throw new Error("Budget amount could not be normalized.");
+      }
+
+      await setBudget({ amount: Number(normalizedBudget) });
+
+      setBudgetLocal(normalizedBudget);
+      router.replace("/home");
     } catch (error) {
       console.error("Failed to save budget", error);
       Alert.alert("Error", "Unable to save budget.");
@@ -108,7 +121,7 @@ export default function Budget() {
         </Pressable>
 
         <Pressable
-          onPress={() => router.push("/home")}
+          onPress={() => router.replace("/home")}
           className="items-center rounded-xl border py-4"
           style={{ backgroundColor: colors.card, borderColor: colors.border }}
         >

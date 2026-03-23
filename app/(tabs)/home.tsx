@@ -11,7 +11,12 @@ export default function Home() {
   const { isDarkMode, formatAmount } = useContext(ExpenseContext);
   const [expenses, setExpenses] = useState<ExpenseDocument[]>([]);
   const [budget, setBudgetState] = useState<number | null>(null);
-  const totalSpent = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+  const getExpenseAmount = (expense: ExpenseDocument) => {
+    const numericAmount = Number(expense.amount);
+    return Number.isFinite(numericAmount) ? numericAmount : 0;
+  };
+
+  const totalSpent = expenses.reduce((sum, expense) => sum + getExpenseAmount(expense), 0);
   const budgetAmount = budget ?? 0;
   const remaining = budgetAmount - totalSpent;
   const percentageUsed = budgetAmount > 0 ? (totalSpent / budgetAmount) * 100 : 0;
@@ -75,7 +80,7 @@ export default function Home() {
 
     const foodSpent = expenses
       .filter((expense) => expense.category.toLowerCase().includes("food"))
-      .reduce((sum, expense) => sum + expense.amount, 0);
+      .reduce((sum, expense) => sum + getExpenseAmount(expense), 0);
 
     if (totalSpent > 0 && foodSpent / totalSpent > 0.5) {
       return "Food spending is your highest expense.";
@@ -368,7 +373,7 @@ export default function Home() {
                 </Text>
               </View>
               <Text className="font-semibold" style={{ color: colors.primary }}>
-                {formatAmount(expense.amount)}
+                {formatAmount(getExpenseAmount(expense))}
               </Text>
             </View>
           ))

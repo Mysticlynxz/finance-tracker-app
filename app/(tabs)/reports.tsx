@@ -99,8 +99,13 @@ export default function Reports() {
         remaining: "#22c55e",
       };
 
+  const getExpenseAmount = (expense: ExpenseDocument) => {
+    const numericAmount = Number(expense.amount);
+    return Number.isFinite(numericAmount) ? numericAmount : 0;
+  };
+
   const totalExpense = useMemo(
-    () => expenses.reduce((sum, expense) => sum + expense.amount, 0),
+    () => expenses.reduce((sum, expense) => sum + getExpenseAmount(expense), 0),
     [expenses]
   );
   const remainingBudget = Math.max(0, budget - totalExpense);
@@ -139,7 +144,7 @@ export default function Reports() {
 
     expenses.forEach((expense) => {
       const dateKey = expense.date.slice(0, 10);
-      totalsByDate[dateKey] = (totalsByDate[dateKey] || 0) + expense.amount;
+      totalsByDate[dateKey] = (totalsByDate[dateKey] || 0) + getExpenseAmount(expense);
     });
 
     return Object.entries(totalsByDate)

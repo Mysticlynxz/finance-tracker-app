@@ -74,6 +74,17 @@ export interface BudgetDocument extends Models.Document {
   userId: string;
 }
 
+const parseNumericAmount = (value: unknown, fieldName: string) => {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    console.warn(`[Appwrite] Invalid numeric value for ${fieldName}:`, value);
+    return 0;
+  }
+
+  return numericValue;
+};
+
 export const registerUser = async ({
   email,
   password,
@@ -135,13 +146,18 @@ export const createExpense = async (
 ): Promise<ExpenseDocument> => {
   try {
     const user = await getCurrentUser();
+    const normalizedAmount = Number(input.amount);
+
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      throw new Error("Expense amount must be a valid number greater than 0.");
+    }
 
     return await databases.createDocument<ExpenseDocument>({
       databaseId: APPWRITE_DATABASE_ID,
       collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
       documentId: ID.unique(),
       data: {
-        amount: input.amount,
+        amount: normalizedAmount,
         category: input.category,
         date: input.date,
         userId: user.$id,
@@ -164,7 +180,10 @@ export const getExpenses = async (): Promise<ExpenseDocument[]> => {
       queries: [Query.equal("userId", user.$id)],
     });
 
-    return response.documents;
+    return response.documents.map((expense) => ({
+      ...expense,
+      amount: parseNumericAmount(expense.amount, `expense:${expense.$id}`),
+    }));
   } catch (error) {
     console.error("getExpenses failed", error);
     throw error;
@@ -176,6 +195,11 @@ export const setBudget = async (
 ): Promise<Models.Document> => {
   try {
     const user = await getCurrentUser();
+    const normalizedAmount = Number(input.amount);
+
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      throw new Error("Budget amount must be a valid number greater than 0.");
+    }
 
     const existingBudgets = await databases.listDocuments<BudgetDocument>({
       databaseId: APPWRITE_DATABASE_ID,
@@ -191,7 +215,7 @@ export const setBudget = async (
         collectionId: APPWRITE_BUDGETS_COLLECTION_ID,
         documentId: existingBudget.$id,
         data: {
-          amount: input.amount,
+          amount: normalizedAmount,
           userId: user.$id,
         },
       });
@@ -202,7 +226,7 @@ export const setBudget = async (
       collectionId: APPWRITE_BUDGETS_COLLECTION_ID,
       documentId: ID.unique(),
       data: {
-        amount: input.amount,
+        amount: normalizedAmount,
         userId: user.$id,
       },
     });
@@ -229,7 +253,7 @@ export const getBudget = async (): Promise<number | null> => {
       return null;
     }
 
-    return budget.amount;
+    return parseNumericAmount(budget.amount, `budget:${budget.$id}`);
   } catch (error) {
     const message = getErrorMessage(error);
     console.error("[Appwrite] getBudget failed:", message);

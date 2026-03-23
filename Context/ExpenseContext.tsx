@@ -43,12 +43,13 @@ interface ExpenseContextType {
     currency: string;
     exchangeRates: Record<string, number>;
     isFetchingRates: boolean;
-    addExpense: (amount: number, category: string) => void;
-    setBudget: (value: number) => void;
+    addExpense: (amountInUSD: number, category: string) => void;
+    setBudget: (amountInUSD: number) => void;
     setCurrency: (value: string) => void;
     setIsDarkMode: React.Dispatch<React.SetStateAction<boolean>>;
     clearExpenses: () => void;
-    fetchExchangeRates: (force?: boolean) => Promise<void>;
+    fetchExchangeRates: (force?: boolean) => Promise<Record<string, number>>;
+    normalizeAmountToUSD: (amountInSelectedCurrency: number) => Promise<number>;
     convertFromUSD: (amount: number) => number;
     formatAmount: (amountInUSD: number) => string;
 }
@@ -94,17 +95,6 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
         [currency, exchangeRates]
     );
 
-    const convertToUSD = useCallback(
-        (amountInSelectedCurrency: number) => {
-            const rate = exchangeRates[currency] ?? 1;
-            if (!Number.isFinite(rate) || rate <= 0) {
-                return amountInSelectedCurrency;
-            }
-            return amountInSelectedCurrency / rate;
-        },
-        [currency, exchangeRates]
-    );
-
     const formatAmount = useCallback(
         (amountInUSD: number) => {
             const convertedAmount = convertFromUSD(amountInUSD);
@@ -146,9 +136,9 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
     );
 
     const fetchExchangeRates = useCallback(
-        async (force = false) => {
+        async (force = false): Promise<Record<string, number>> => {
             if (isFetchingRates && !force) {
-                return;
+                return exchangeRates;
             }
 
             const now = Date.now();
@@ -163,7 +153,7 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
                 lastFetchedAt !== null &&
                 now - lastFetchedAt < cacheDurationMs
             ) {
-                return;
+                return exchangeRates;
             }
 
             setIsFetchingRates(true);
@@ -193,9 +183,12 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
                     USD: 1,
                 }));
                 setLastFetchedAt(now);
+                return nextRates;
             } catch {
-                setExchangeRates({ USD: 1 });
+                const fallbackRates = { USD: 1 };
+                setExchangeRates(fallbackRates);
                 setCurrencyState("INR");
+                return fallbackRates;
             } finally {
                 setIsFetchingRates(false);
             }
@@ -209,8 +202,34 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
         }
     }, [currency, fetchExchangeRates]);
 
-    const addExpense = (amount: number, category: string) => {
-        const amountInUSD = convertToUSD(amount);
+    const normalizeAmountToUSD = useCallback(
+        async (amountInSelectedCurrency: number) => {
+            if (!Number.isFinite(amountInSelectedCurrency) || amountInSelectedCurrency <= 0) {
+                return 0;
+            }
+
+            if (currency === "USD") {
+                return amountInSelectedCurrency;
+            }
+
+            const currentRate = exchangeRates[currency];
+            if (Number.isFinite(currentRate) && currentRate > 0) {
+                return amountInSelectedCurrency / currentRate;
+            }
+
+            const latestRates = await fetchExchangeRates(true);
+            const latestRate = latestRates[currency];
+
+            if (!Number.isFinite(latestRate) || latestRate <= 0) {
+                throw new Error(`Exchange rate unavailable for ${currency}.`);
+            }
+
+            return amountInSelectedCurrency / latestRate;
+        },
+        [currency, exchangeRates, fetchExchangeRates]
+    );
+
+    const addExpense = (amountInUSD: number, category: string) => {
         const normalizedAmount =
             Number.isFinite(amountInUSD) && amountInUSD > 0 ? amountInUSD : 0;
 
@@ -228,8 +247,7 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
         setExpenses([]);
     };
 
-    const setBudget = (value: number) => {
-        const amountInUSD = convertToUSD(value);
+    const setBudget = (amountInUSD: number) => {
         const normalizedAmount =
             Number.isFinite(amountInUSD) && amountInUSD > 0 ? amountInUSD : 0;
         setBudgetInUSD(normalizedAmount);
@@ -250,6 +268,7 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
                 exchangeRates,
                 isFetchingRates,
                 fetchExchangeRates,
+                normalizeAmountToUSD,
                 convertFromUSD,
                 formatAmount,
             }}
