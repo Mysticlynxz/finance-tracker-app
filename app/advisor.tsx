@@ -22,7 +22,7 @@ interface ChatMessage {
 }
 
 export default function AdvisorScreen() {
-  const { isDarkMode } = useContext(ExpenseContext);
+  const { isDarkMode, currency, exchangeRates } = useContext(ExpenseContext);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
@@ -80,7 +80,11 @@ export default function AdvisorScreen() {
     setIsLoading(true);
 
     try {
-      const reply = await askFinancialAdvisor(trimmedMessage);
+      const reply = await askFinancialAdvisor(
+        trimmedMessage,
+        currency,
+        exchangeRates[currency] ?? 1
+      );
       setMessages((current) => [...current, { role: "assistant", text: reply }]);
     } catch (error) {
       const fallbackMessage =

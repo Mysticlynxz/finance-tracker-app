@@ -9,6 +9,21 @@ const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 const RUPEE_SYMBOL = "\u20B9";
+const DEFAULT_DISPLAY_CURRENCY = "INR";
+const CURRENCY_SYMBOLS = {
+  INR: RUPEE_SYMBOL,
+  USD: "$",
+  EUR: "\u20AC",
+  GBP: "\u00A3",
+  JPY: "\u00A5",
+  CNY: "\u00A5",
+  AUD: "A$",
+  CAD: "C$",
+  CHF: "Fr.",
+  SGD: "S$",
+  AED: "\u062F.\u0625",
+  SAR: "\uFDFC",
+};
 const APPWRITE_ENDPOINT =
   process.env.APPWRITE_ENDPOINT?.trim() ||
   process.env.APPWRITE_FUNCTION_API_ENDPOINT?.trim() ||
@@ -58,6 +73,26 @@ const getHeader = (req, headerName) => {
   }
 
   return "";
+};
+
+const getDisplayCurrency = (value) => {
+  if (typeof value !== "string" || !value.trim()) {
+    return DEFAULT_DISPLAY_CURRENCY;
+  }
+
+  return value.trim().toUpperCase();
+};
+
+const getPromptAmount = (value, exchangeRate) => {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return 0;
+  }
+
+  const numericRate = Number(exchangeRate);
+  const resolvedRate = Number.isFinite(numericRate) && numericRate > 0 ? numericRate : 1;
+  return Math.round(numericValue * resolvedRate * 100) / 100;
 };
 
 const createAppwriteClient = (req) => {
@@ -121,7 +156,7 @@ const getFinancialContext = async (req, log) => {
     }),
   ]);
 
-  log("Raw expenses from DB: " + JSON.stringify(expenseResponse.documents));
+  log("RAW expenses from DB: " + JSON.stringify(expenseResponse.documents));
 
   const expenses = expenseResponse.documents.map((expense) => ({
     category:
@@ -163,6 +198,12 @@ export default async ({ req, res, log, error }) => {
       typeof body.message === "string" && body.message.trim()
         ? body.message.trim()
         : "Give one practical budgeting tip.";
+    const displayCurrency = getDisplayCurrency(body.currency);
+    const exchangeRate =
+      Number.isFinite(Number(body.exchangeRate)) && Number(body.exchangeRate) > 0
+        ? Number(body.exchangeRate)
+        : 1;
+    const currencySymbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
     const apiKey = process.env.GEMINI_API_KEY?.trim();
 
     if (!apiKey) {
@@ -178,24 +219,30 @@ export default async ({ req, res, log, error }) => {
     }
 
     const { userId, budget, expenses } = financialContext;
-    const expenseLines =
+    const formattedExpenses =
       expenses.length > 0
         ? expenses
             .map(
               (expense) =>
-                `${expense.category}: ${RUPEE_SYMBOL}${Number(expense.amount)}`
+                `${expense.category}: ${currencySymbol}${getPromptAmount(
+                  expense.amount,
+                  exchangeRate
+                )}`
             )
             .join("\n")
         : "No recent expenses found.";
+    const budgetAmount =
+      budget === null ? null : getPromptAmount(budget, exchangeRate);
     const budgetLine =
-      budget === null ? "Not set" : `${RUPEE_SYMBOL}${Number(budget)}`;
+      budgetAmount === null ? "Not set" : `${currencySymbol}${budgetAmount}`;
     const prompt = `
 You are a smart financial advisor inside a budgeting app.
 
+Display Currency: ${displayCurrency}
 User Budget: ${budgetLine}
 
 Recent Expenses:
-${expenseLines}
+${formattedExpenses}
 
 User Question: ${message}
 
@@ -203,6 +250,7 @@ Give short, practical, personalized financial advice based on the user's spendin
 `.trim();
 
     log("Generating advice for user: " + userId);
+    log("Formatted expenses: " + formattedExpenses);
     log("Final prompt: " + prompt);
 
     const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {

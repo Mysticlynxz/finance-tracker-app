@@ -325,17 +325,32 @@ export const resetAllData = async (): Promise<void> => {
   }
 };
 
-export const askFinancialAdvisor = async (message: string): Promise<string> => {
+export const askFinancialAdvisor = async (
+  message: string,
+  currency?: string,
+  exchangeRate?: number
+): Promise<string> => {
   const trimmedMessage = message.trim();
 
   if (!trimmedMessage) {
     return AI_ADVISOR_UNAVAILABLE_MESSAGE;
   }
 
+  const normalizedCurrency =
+    typeof currency === "string" && currency.trim() ? currency.trim().toUpperCase() : "INR";
+  const normalizedExchangeRate = Number(exchangeRate);
+
   try {
     const execution = await functions.createExecution({
       functionId: APPWRITE_AI_ADVISOR_FUNCTION_ID,
-      body: JSON.stringify({ message: trimmedMessage }),
+      body: JSON.stringify({
+        message: trimmedMessage,
+        currency: normalizedCurrency,
+        exchangeRate:
+          Number.isFinite(normalizedExchangeRate) && normalizedExchangeRate > 0
+            ? normalizedExchangeRate
+            : 1,
+      }),
       async: false,
       method: ExecutionMethod.POST,
       headers: {
