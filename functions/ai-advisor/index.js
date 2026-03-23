@@ -51,7 +51,7 @@ export default async ({ req, res, log, error }) => {
         "X-Title": "Finance Tracker App",
       },
       body: JSON.stringify({
-        model: "mistralai/mistral-7b-instruct",
+        model: "mistralai/mistral-7b-instruct:free",
         messages: [
           {
             role: "system",
