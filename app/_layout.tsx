@@ -14,6 +14,7 @@ type SessionState = "loading" | "authenticated" | "unauthenticated";
 const LOGIN_ROUTE = "/login" as Href;
 const HOME_ROUTE = "/home" as Href;
 const ADVISOR_ROUTE_SEGMENT = "advisor";
+const VOICE_INPUT_ROUTE_SEGMENT = "voice-input";
 
 function SessionLoadingScreen() {
   return (
@@ -55,6 +56,7 @@ export default function Layout() {
   const isAuthRoute = currentSegment === "login" || currentSegment === "register";
   const isTabsRoute = currentSegment === "(tabs)";
   const isAdvisorRoute = currentSegment === ADVISOR_ROUTE_SEGMENT;
+  const isVoiceInputRoute = currentSegment === VOICE_INPUT_ROUTE_SEGMENT;
 
   if (sessionState === "loading") {
     return (
@@ -64,7 +66,13 @@ export default function Layout() {
     );
   }
 
-  if (sessionState === "authenticated" && !isTabsRoute && !isAuthRoute && !isAdvisorRoute) {
+  if (
+    sessionState === "authenticated" &&
+    !isTabsRoute &&
+    !isAuthRoute &&
+    !isAdvisorRoute &&
+    !isVoiceInputRoute
+  ) {
     return (
       <ExpenseProvider>
         <Redirect href={HOME_ROUTE} />

@@ -77,6 +77,11 @@ export interface BudgetDocument extends Models.Document {
   userId: string;
 }
 
+export interface ParsedVoiceExpense {
+  amount: number;
+  category: string;
+}
+
 // IMPORTANT:
 // Always store raw currency values ONLY in INR.
 // Never convert or scale before writing anything except selected currency -> INR.
@@ -333,49 +338,81 @@ export const resetAllData = async (): Promise<void> => {
   }
 };
 
-export const askFinancialAdvisor = async (
-  message: string,
-  currency?: string
-): Promise<string> => {
+const executeAiFunction = async (payload: Record<string, unknown>) => {
+  const execution = await functions.createExecution({
+    functionId: APPWRITE_AI_ADVISOR_FUNCTION_ID,
+    body: JSON.stringify(payload),
+    async: false,
+    method: ExecutionMethod.POST,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!execution.responseBody) {
+    throw new Error("Empty AI function response.");
+  }
+
+  const parsedResponse = JSON.parse(execution.responseBody) as { reply?: unknown };
+  const reply =
+    typeof parsedResponse.reply === "string" ? parsedResponse.reply.trim() : "";
+
+  if (!reply) {
+    throw new Error("AI function returned an empty reply.");
+  }
+
+  return reply;
+};
+
+export const askFinancialAdvisor = async (message: string, currency?: string): Promise<string> => {
   const trimmedMessage = message.trim();
 
   if (!trimmedMessage) {
     return AI_ADVISOR_UNAVAILABLE_MESSAGE;
   }
 
-  const normalizedCurrency = normalizeCurrencyCode(currency);
-
   try {
-    const execution = await functions.createExecution({
-      functionId: APPWRITE_AI_ADVISOR_FUNCTION_ID,
-      body: JSON.stringify({
-        message: trimmedMessage,
-        currency: normalizedCurrency,
-      }),
-      async: false,
-      method: ExecutionMethod.POST,
-      headers: {
-        "Content-Type": "application/json",
-      },
+    return await executeAiFunction({
+      mode: "advisor",
+      message: trimmedMessage,
+      currency: normalizeCurrencyCode(currency),
     });
-
-    if (!execution.responseBody) {
-      return AI_ADVISOR_UNAVAILABLE_MESSAGE;
-    }
-
-    const parsedResponse = JSON.parse(execution.responseBody) as { reply?: unknown };
-
-    const reply =
-      typeof parsedResponse.reply === "string" ? parsedResponse.reply : "";
-
-    if (!reply.trim()) {
-      return AI_ADVISOR_UNAVAILABLE_MESSAGE;
-    }
-
-    return reply;
   } catch (error) {
     const message = getErrorMessage(error);
     console.error("[Appwrite] askFinancialAdvisor failed:", message);
     return AI_ADVISOR_UNAVAILABLE_MESSAGE;
+  }
+};
+
+export const extractExpenseFromSpeech = async (
+  transcript: string
+): Promise<ParsedVoiceExpense> => {
+  const trimmedTranscript = transcript.trim();
+
+  if (!trimmedTranscript) {
+    throw new Error("Please say the expense first.");
+  }
+
+  try {
+    const reply = await executeAiFunction({
+      mode: "extract-expense",
+      message: trimmedTranscript,
+    });
+    const parsed = JSON.parse(reply) as {
+      amount?: unknown;
+      category?: unknown;
+    };
+
+    return {
+      amount: Number(parsed.amount),
+      category:
+        typeof parsed.category === "string" && parsed.category.trim()
+          ? parsed.category.trim()
+          : "Others",
+    };
+  } catch (error) {
+    const message = getErrorMessage(error);
+    console.error("[Appwrite] extractExpenseFromSpeech failed:", message);
+    throw new Error("Couldn't understand that expense. Please try again.");
   }
 };

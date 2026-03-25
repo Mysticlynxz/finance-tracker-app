@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useContext, useEffect, useRef, useState } from "react";
 import {
@@ -265,6 +266,24 @@ export default function AddExpense() {
           </Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={() => {
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          router.push("/voice-input");
+        }}
+        className="absolute bottom-8 right-6 h-16 w-16 items-center justify-center rounded-full bg-emerald-600"
+        style={{
+          shadowColor: "#0f172a",
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: 0.2,
+          shadowRadius: 16,
+          elevation: 8,
+        }}
+      >
+        <Ionicons name="mic" size={24} color="#ffffff" />
+      </TouchableOpacity>
 
       <Modal
         visible={isExpenseModalVisible}

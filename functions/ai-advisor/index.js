@@ -1,7 +1,7 @@
 import { Client, Databases, Query } from "appwrite";
 import fetch from "node-fetch";
 
-const FRIENDLY_FALLBACK =
+const AI_ADVISOR_FALLBACK =
   "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
 const NO_EXPENSES_FALLBACK =
   "Add some expenses first \u2014 your wallet is still a mystery \u{1F604}";
@@ -9,6 +9,10 @@ const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 const DEFAULT_DISPLAY_CURRENCY = "INR";
+const DEFAULT_EXTRACTED_EXPENSE = JSON.stringify({
+  category: "Others",
+  amount: 0,
+});
 const RECENT_EXPENSE_LIMIT = 8;
 
 // DATABASE RULE:
@@ -20,6 +24,7 @@ const RECENT_EXPENSE_LIMIT = 8;
 //
 // AI RULE:
 // Always respond in the selected currency.
+// Voice NLP extracts only category + amount.
 const currencyConfig = {
   INR: { symbol: "\u20B9", rate: 1 },
   USD: { symbol: "$", rate: 83 },
@@ -35,7 +40,7 @@ const currencyConfig = {
   SAR: { symbol: "\uFDFC", rate: 22 },
 };
 
-const SYSTEM_PROMPT = `
+const ADVISOR_SYSTEM_PROMPT = `
 You are a smart and slightly humorous financial advisor inside a budgeting app.
 Give short, practical, and personalized advice based on the user's expenses and budget.
 Use light humor occasionally, but keep it friendly and useful.
@@ -216,51 +221,117 @@ const getFinancialContext = async (req) => {
   };
 };
 
-export default async ({ req, res, log, error }) => {
+const extractReplyText = (data) => {
+  const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  return typeof reply === "string" ? reply.trim() : "";
+};
+
+const callGemini = async ({ apiKey, prompt, systemPrompt }) => {
+  const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ...(systemPrompt
+        ? {
+            systemInstruction: {
+              parts: [{ text: systemPrompt }],
+            },
+          }
+        : {}),
+      contents: [
+        {
+          parts: [{ text: prompt }],
+        },
+      ],
+    }),
+  });
+
+  const rawResponse = await response.text();
+  let data = {};
+
   try {
-    const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
+    data = rawResponse ? JSON.parse(rawResponse) : {};
+  } catch {
+    throw new Error(`Failed to parse Gemini response JSON: ${rawResponse}`);
+  }
 
-    if (!jwt) {
-      return res.json({ reply: UNAUTHENTICATED_FALLBACK });
-    }
+  if (!response.ok) {
+    throw new Error(`Gemini API error (${response.status}): ${JSON.stringify(data)}`);
+  }
 
-    const body = parseRequestBody(req);
-    const message =
-      typeof body.message === "string" && body.message.trim()
-        ? body.message.trim()
-        : "Give one practical budgeting tip.";
-    const currency = getDisplayCurrency(body.currency);
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
+  return data;
+};
 
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is missing.");
-    }
+const sanitizeJsonReply = (reply) =>
+  reply
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 
-    const financialContext = await getFinancialContext(req);
+const buildVoiceExpenseReply = async ({ apiKey, transcript }) => {
+  const extractionPrompt = `
+Extract expense details from this sentence:
+"${transcript}"
 
-    if (!financialContext) {
-      return res.json({ reply: UNAUTHENTICATED_FALLBACK });
-    }
+Return ONLY JSON:
+{
+  "category": "string",
+  "amount": number
+}
 
-    const { userId, budget, expenses } = financialContext;
+Rules:
+- If category unclear -> "Others"
+- If amount missing -> 0
+- No explanation
+`.trim();
 
-    if (!expenses || expenses.length === 0) {
-      return res.json({ reply: NO_EXPENSES_FALLBACK });
-    }
+  const data = await callGemini({
+    apiKey,
+    prompt: extractionPrompt,
+  });
 
-    const formattedExpenses = expenses
-      .map((expense) => {
-        const convertedAmount = convertFromINR(expense.amount, currency);
-        return `${expense.category}: ${formatCurrency(convertedAmount, currency)}`;
-      })
-      .join("\n");
+  const reply = extractReplyText(data);
 
-    const formattedBudget =
-      budget === null
-        ? "Not set"
-        : formatCurrency(convertFromINR(budget, currency), currency);
+  if (!reply) {
+    return DEFAULT_EXTRACTED_EXPENSE;
+  }
 
-    const prompt = `
+  const parsed = JSON.parse(sanitizeJsonReply(reply));
+  const category =
+    typeof parsed?.category === "string" && parsed.category.trim()
+      ? parsed.category.trim()
+      : "Others";
+  const amount = roundAmount(parsed?.amount);
+
+  return JSON.stringify({
+    category,
+    amount,
+  });
+};
+
+const buildAdvisorReply = async ({ apiKey, currency, financialContext, message, log }) => {
+  const { userId, budget, expenses } = financialContext;
+
+  if (!expenses || expenses.length === 0) {
+    return NO_EXPENSES_FALLBACK;
+  }
+
+  const formattedExpenses = expenses
+    .map((expense) => {
+      const convertedAmount = convertFromINR(expense.amount, currency);
+      return `${expense.category}: ${formatCurrency(convertedAmount, currency)}`;
+    })
+    .join("\n");
+
+  const formattedBudget =
+    budget === null
+      ? "Not set"
+      : formatCurrency(convertFromINR(budget, currency), currency);
+
+  const prompt = `
 You are a smart and slightly humorous financial advisor inside a budgeting app.
 
 User preferred currency: ${currency}
@@ -283,47 +354,80 @@ ${message}
 Give personalized financial advice based on the data.
 `.trim();
 
-    log(`Generating advice for user ${userId} in ${currency}`);
+  log(`Generating advisor reply for user ${userId} in ${currency}`);
 
-    const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: SYSTEM_PROMPT }],
-        },
-        contents: [
-          {
-            parts: [{ text: prompt }],
-          },
-        ],
-      }),
+  const data = await callGemini({
+    apiKey,
+    prompt,
+    systemPrompt: ADVISOR_SYSTEM_PROMPT,
+  });
+
+  return extractReplyText(data) || AI_ADVISOR_FALLBACK;
+};
+
+export default async ({ req, res, log, error }) => {
+  try {
+    const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
+
+    if (!jwt) {
+      return res.json({ reply: UNAUTHENTICATED_FALLBACK });
+    }
+
+    const body = parseRequestBody(req);
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is missing.");
+    }
+
+    const mode =
+      typeof body.mode === "string" && body.mode.trim()
+        ? body.mode.trim().toLowerCase()
+        : "advisor";
+
+    if (mode === "extract-expense") {
+      const transcript =
+        typeof body.message === "string" && body.message.trim()
+          ? body.message.trim()
+          : typeof body.transcript === "string" && body.transcript.trim()
+            ? body.transcript.trim()
+            : "";
+
+      if (!transcript) {
+        return res.json({ reply: DEFAULT_EXTRACTED_EXPENSE });
+      }
+
+      const reply = await buildVoiceExpenseReply({
+        apiKey,
+        transcript,
+      });
+
+      return res.json({ reply });
+    }
+
+    const financialContext = await getFinancialContext(req);
+
+    if (!financialContext) {
+      return res.json({ reply: UNAUTHENTICATED_FALLBACK });
+    }
+
+    const message =
+      typeof body.message === "string" && body.message.trim()
+        ? body.message.trim()
+        : "Give one practical budgeting tip.";
+    const currency = getDisplayCurrency(body.currency);
+
+    const reply = await buildAdvisorReply({
+      apiKey,
+      currency,
+      financialContext,
+      message,
+      log,
     });
 
-    const rawResponse = await response.text();
-    let data = {};
-
-    try {
-      data = rawResponse ? JSON.parse(rawResponse) : {};
-    } catch {
-      throw new Error(`Failed to parse Gemini response JSON: ${rawResponse}`);
-    }
-
-    if (!response.ok) {
-      throw new Error(`Gemini API error (${response.status}): ${JSON.stringify(data)}`);
-    }
-
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!reply || typeof reply !== "string" || !reply.trim()) {
-      return res.json({ reply: FRIENDLY_FALLBACK });
-    }
-
-    return res.json({ reply: reply.trim() });
+    return res.json({ reply });
   } catch (err) {
     error(`Gemini error: ${err?.message || String(err)}`);
-    return res.json({ reply: FRIENDLY_FALLBACK });
+    return res.json({ reply: AI_ADVISOR_FALLBACK });
   }
 };
