@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useContext, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
@@ -14,7 +14,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
-import { askFinancialAdvisor } from "../lib/appwrite";
+import {
+  AI_ADVISOR_FALLBACK_RESPONSE,
+  askFinancialAdvisor,
+} from "../lib/appwrite";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -26,7 +29,7 @@ export default function AdvisorScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "Hi. Ask me about spending, budget planning, or saving strategies.",
+      text: "Ask me about spending, budgets, or saving moves. I’ll keep it useful and only slightly judge that snack budget 😄",
     },
   ]);
   const [input, setInput] = useState("");
@@ -59,9 +62,17 @@ export default function AdvisorScreen() {
     [isDarkMode]
   );
 
-  const scrollToBottom = () => {
-    scrollViewRef.current?.scrollToEnd({ animated: true });
+  const scrollToBottom = (animated = true) => {
+    scrollViewRef.current?.scrollToEnd({ animated });
   };
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      scrollToBottom();
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [messages, isLoading]);
 
   const handleSend = async () => {
     if (isLoading) {
@@ -87,16 +98,14 @@ export default function AdvisorScreen() {
       );
       setMessages((current) => [...current, { role: "assistant", text: reply }]);
     } catch (error) {
-      const fallbackMessage =
-        error instanceof Error && error.message
-          ? error.message
-          : "Unable to fetch advice right now.";
-
       setMessages((current) => [
         ...current,
         {
           role: "assistant",
-          text: `Sorry, I couldn't respond right now. ${fallbackMessage}`,
+          text:
+            error instanceof Error && error.message.trim()
+              ? error.message
+              : AI_ADVISOR_FALLBACK_RESPONSE,
         },
       ]);
     } finally {
@@ -139,9 +148,9 @@ export default function AdvisorScreen() {
         <ScrollView
           ref={scrollViewRef}
           className="flex-1 px-4"
-          contentContainerStyle={{ gap: 10, paddingBottom: 20, paddingTop: 16 }}
-          onContentSizeChange={scrollToBottom}
-          onLayout={scrollToBottom}
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 20, paddingTop: 16 }}
+          onContentSizeChange={() => scrollToBottom()}
+          onLayout={() => scrollToBottom(false)}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -151,31 +160,68 @@ export default function AdvisorScreen() {
             return (
               <View
                 key={`${message.role}-${index}`}
-                className={`max-w-[82%] rounded-2xl px-4 py-3 ${isUser ? "self-end" : "self-start"}`}
                 style={{
-                  backgroundColor: isUser ? colors.userBubble : colors.assistantBubble,
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  justifyContent: isUser ? "flex-end" : "flex-start",
+                  width: "100%",
                 }}
               >
-                <Text
-                  className="text-base leading-6"
-                  style={{ color: isUser ? "#ffffff" : colors.primary }}
+                <View
+                  style={{
+                    alignSelf: isUser ? "flex-end" : "flex-start",
+                    backgroundColor: isUser
+                      ? colors.userBubble
+                      : colors.assistantBubble,
+                    borderRadius: 12,
+                    flexShrink: 1,
+                    marginVertical: 5,
+                    maxWidth: "80%",
+                    padding: 12,
+                  }}
                 >
-                  {message.text}
-                </Text>
+                  <Text
+                    className="text-base"
+                    style={{
+                      color: isUser ? "#ffffff" : colors.primary,
+                      flexShrink: 1,
+                      flexWrap: "wrap",
+                      lineHeight: 20,
+                    }}
+                  >
+                    {message.text}
+                  </Text>
+                </View>
               </View>
             );
           })}
 
           {isLoading && (
             <View
-              className="max-w-[82%] self-start rounded-2xl px-4 py-3"
-              style={{ backgroundColor: colors.assistantBubble }}
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                justifyContent: "flex-start",
+                width: "100%",
+              }}
             >
-              <View className="flex-row items-center gap-2">
-                <ActivityIndicator size="small" color={colors.secondary} />
-                <Text className="text-sm" style={{ color: colors.secondary }}>
-                  Thinking...
-                </Text>
+              <View
+                style={{
+                  alignSelf: "flex-start",
+                  backgroundColor: colors.assistantBubble,
+                  borderRadius: 12,
+                  flexShrink: 1,
+                  marginVertical: 5,
+                  maxWidth: "80%",
+                  padding: 12,
+                }}
+              >
+                <View className="flex-row items-center gap-2">
+                  <ActivityIndicator size="small" color={colors.secondary} />
+                  <Text className="text-sm" style={{ color: colors.secondary }}>
+                    AI is thinking...
+                  </Text>
+                </View>
               </View>
             </View>
           )}

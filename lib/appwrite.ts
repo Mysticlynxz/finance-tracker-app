@@ -16,7 +16,9 @@ export const APPWRITE_DATABASE_ID = "69a4e415003c658fe722";
 const APPWRITE_EXPENSES_COLLECTION_ID = "expenses";
 const APPWRITE_BUDGETS_COLLECTION_ID = "budgets";
 const APPWRITE_AI_ADVISOR_FUNCTION_ID ="69a76eab00275ef10835";
-const AI_ADVISOR_UNAVAILABLE_MESSAGE = "Sorry, the AI advisor is currently unavailable.";
+export const AI_ADVISOR_FALLBACK_RESPONSE =
+  "I'm having trouble right now, but hey — tracking expenses already puts you ahead of most people 😄";
+const AI_ADVISOR_UNAVAILABLE_MESSAGE = AI_ADVISOR_FALLBACK_RESPONSE;
 const PROJECT_PAUSED_ERROR_TEXT = "Project is paused due to inactivity";
 const PROJECT_PAUSED_RECOVERY_MESSAGE =
   "The backend is paused due to inactivity. Open Appwrite Console and restore this project, then try again.";

@@ -1,13 +1,26 @@
 import { Client, Databases, Query } from "appwrite";
 import fetch from "node-fetch";
 
-const NO_RESPONSE_FALLBACK =
-  "Try reducing unnecessary expenses and tracking your daily spending.";
-const ERROR_FALLBACK =
-  "Track your expenses daily and avoid unnecessary purchases to improve savings.";
+const FRIENDLY_FALLBACK =
+  "I'm having trouble right now, but hey — tracking expenses already puts you ahead of most people 😄";
+const NO_RESPONSE_FALLBACK = FRIENDLY_FALLBACK;
+const ERROR_FALLBACK = FRIENDLY_FALLBACK;
 const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+const SYSTEM_PROMPT = `
+You are a smart and slightly humorous financial advisor inside a budgeting app.
+Give short, practical, and personalized advice based on the user's expenses and budget.
+Use light humor occasionally (friendly, not sarcastic or offensive).
+Keep responses clear, helpful, and engaging.
+
+Response style rules:
+- Always reply as a markdown bullet list with 3 to 5 bullet points maximum.
+- Keep each bullet short, practical, and tied to the user's budget or spending categories.
+- You may add one small humorous line when it fits, such as "Your wallet is crying 😅" or "That coffee habit is expensive 👀".
+- Avoid overdoing jokes, emojis, or playful comments.
+- Example tone: "Looks like food is taking a big bite out of your wallet 🍔😅 — try cutting down a bit!"
+`.trim();
 const RUPEE_SYMBOL = "\u20B9";
 const DEFAULT_DISPLAY_CURRENCY = "INR";
 const CURRENCY_SYMBOLS = {
@@ -236,8 +249,6 @@ export default async ({ req, res, log, error }) => {
     const budgetLine =
       budgetAmount === null ? "Not set" : `${currencySymbol}${budgetAmount}`;
     const prompt = `
-You are a smart financial advisor inside a budgeting app.
-
 Display Currency: ${displayCurrency}
 User Budget: ${budgetLine}
 
@@ -259,6 +270,9 @@ Give short, practical, personalized financial advice based on the user's spendin
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: SYSTEM_PROMPT }],
+        },
         contents: [
           {
             parts: [{ text: prompt }],
