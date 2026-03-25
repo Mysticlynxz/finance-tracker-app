@@ -13,7 +13,6 @@ export default function Budget() {
     currency,
     formatAmount,
     budget,
-    normalizeAmountToUSD,
   } =
     useContext(ExpenseContext);
   const [value, setValue] = useState("");
@@ -47,15 +46,9 @@ export default function Budget() {
     }
 
     try {
-      const normalizedBudget = Number(await normalizeAmountToUSD(parsedBudget));
-
-      if (!Number.isFinite(normalizedBudget) || normalizedBudget <= 0) {
-        throw new Error("Budget amount could not be normalized.");
-      }
-
-      await setBudget({ amount: Number(normalizedBudget) });
-
-      setBudgetLocal(normalizedBudget);
+      console.log("Saving amount:", parsedBudget);
+      await setBudget({ amount: Number(parsedBudget) });
+      setBudgetLocal(Number(parsedBudget));
       router.replace("/home");
     } catch (error) {
       console.error("Failed to save budget", error);

@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useEffect, useState } from "react";
+import React, { createContext, useCallback, useState } from "react";
 import { Expense } from "../types/expense";
 
 export const SUPPORTED_CURRENCIES = [
@@ -16,24 +16,19 @@ export const SUPPORTED_CURRENCIES = [
     "SAR",
 ] as const;
 
-type ExchangeRatesResponse = {
-    rates?: Record<string, number>;
-    result?: string;
-};
-
 const CURRENCY_SYMBOL_FALLBACKS: Record<string, string> = {
-    INR: "₹",
+    INR: "\u20B9",
     USD: "$",
-    EUR: "€",
-    GBP: "£",
-    JPY: "¥",
-    CNY: "¥",
+    EUR: "\u20AC",
+    GBP: "\u00A3",
+    JPY: "\u00A5",
+    CNY: "\u00A5",
     AUD: "$",
     CAD: "$",
     CHF: "Fr.",
     SGD: "$",
-    AED: "د.إ",
-    SAR: "﷼",
+    AED: "\u062F.\u0625",
+    SAR: "\uFDFC",
 };
 
 interface ExpenseContextType {
@@ -41,17 +36,12 @@ interface ExpenseContextType {
     budget: number;
     isDarkMode: boolean;
     currency: string;
-    exchangeRates: Record<string, number>;
-    isFetchingRates: boolean;
-    addExpense: (amountInUSD: number, category: string) => void;
-    setBudget: (amountInUSD: number) => void;
+    addExpense: (amount: number, category: string) => void;
+    setBudget: (amount: number) => void;
     setCurrency: (value: string) => void;
     setIsDarkMode: React.Dispatch<React.SetStateAction<boolean>>;
     clearExpenses: () => void;
-    fetchExchangeRates: (force?: boolean) => Promise<Record<string, number>>;
-    normalizeAmountToUSD: (amountInSelectedCurrency: number) => Promise<number>;
-    convertFromUSD: (amount: number) => number;
-    formatAmount: (amountInUSD: number) => string;
+    formatAmount: (amount: number) => string;
 }
 
 export const ExpenseContext = createContext<ExpenseContextType>(
@@ -62,18 +52,40 @@ interface ExpenseProviderProps {
     children: React.ReactNode;
 }
 
+const resolveCurrencySymbol = (currency: string) => {
+    try {
+        const parts = new Intl.NumberFormat(undefined, {
+            style: "currency",
+            currency,
+            currencyDisplay: "narrowSymbol",
+            maximumFractionDigits: 2,
+        }).formatToParts(0);
+
+        const rawSymbol =
+            parts.find((part) => part.type === "currency")?.value ??
+            CURRENCY_SYMBOL_FALLBACKS[currency] ??
+            "$";
+
+        const symbolWithoutCountryPrefix = rawSymbol.replace(
+            /^[A-Za-z]{1,3}(?=\$)/,
+            ""
+        );
+
+        return (
+            symbolWithoutCountryPrefix.trim() ||
+            CURRENCY_SYMBOL_FALLBACKS[currency] ||
+            "$"
+        );
+    } catch {
+        return CURRENCY_SYMBOL_FALLBACKS[currency] ?? "$";
+    }
+};
+
 export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
     const [expenses, setExpenses] = useState<Expense[]>([]);
-    const [budget, setBudgetInUSD] = useState<number>(0);
+    const [budget, setBudgetAmount] = useState<number>(0);
     const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
     const [currency, setCurrencyState] = useState<string>("INR");
-    const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({
-        USD: 1,
-    });
-    const [isFetchingRates, setIsFetchingRates] = useState<boolean>(false);
-    const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
-
-    const cacheDurationMs = 60 * 60 * 1000;
 
     const setCurrency = useCallback((value: string) => {
         const normalized = value.toUpperCase();
@@ -84,154 +96,22 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
         setCurrencyState("INR");
     }, []);
 
-    const convertFromUSD = useCallback(
-        (amountInUSD: number) => {
-            const rate = exchangeRates[currency] ?? 1;
-            if (!Number.isFinite(rate) || rate <= 0) {
-                return amountInUSD;
-            }
-            return amountInUSD * rate;
-        },
-        [currency, exchangeRates]
-    );
-
     const formatAmount = useCallback(
-        (amountInUSD: number) => {
-            const convertedAmount = convertFromUSD(amountInUSD);
-            try {
-                const parts = new Intl.NumberFormat(undefined, {
-                    style: "currency",
-                    currency,
-                    currencyDisplay: "narrowSymbol",
-                    maximumFractionDigits: 2,
-                }).formatToParts(0);
+        (amount: number) => {
+            const numericAmount = Number(amount);
+            const safeAmount = Number.isFinite(numericAmount) ? numericAmount : 0;
+            const currencySymbol = resolveCurrencySymbol(currency);
 
-                const rawSymbol =
-                    parts.find((part) => part.type === "currency")?.value ??
-                    CURRENCY_SYMBOL_FALLBACKS[currency] ??
-                    "$";
+            console.log("Displaying amount:", safeAmount);
 
-                const symbolWithoutCountryPrefix = rawSymbol.replace(
-                    /^[A-Za-z]{1,3}(?=\$)/,
-                    ""
-                );
-
-                const resolvedSymbol =
-                    symbolWithoutCountryPrefix.trim() ||
-                    CURRENCY_SYMBOL_FALLBACKS[currency] ||
-                    "$";
-
-                const numericPart = new Intl.NumberFormat(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                }).format(convertedAmount);
-
-                return `${resolvedSymbol}${numericPart}`;
-            } catch {
-                const fallbackSymbol = CURRENCY_SYMBOL_FALLBACKS[currency] ?? "$";
-                return `${fallbackSymbol}${convertedAmount.toFixed(2)}`;
-            }
+            return `${currencySymbol}${safeAmount.toFixed(2)}`;
         },
-        [convertFromUSD, currency]
+        [currency]
     );
 
-    const fetchExchangeRates = useCallback(
-        async (force = false): Promise<Record<string, number>> => {
-            if (isFetchingRates && !force) {
-                return exchangeRates;
-            }
-
-            const now = Date.now();
-            const hasSupportedRates = SUPPORTED_CURRENCIES.every((code) => {
-                const rate = exchangeRates[code];
-                return Number.isFinite(rate) && rate > 0;
-            });
-
-            if (
-                !force &&
-                hasSupportedRates &&
-                lastFetchedAt !== null &&
-                now - lastFetchedAt < cacheDurationMs
-            ) {
-                return exchangeRates;
-            }
-
-            setIsFetchingRates(true);
-
-            try {
-                const response = await fetch("https://open.er-api.com/v6/latest/USD");
-                if (!response.ok) {
-                    throw new Error("Failed to fetch exchange rates.");
-                }
-
-                const data = (await response.json()) as ExchangeRatesResponse;
-                if (!data.rates || data.result === "error") {
-                    throw new Error("Invalid exchange rate response.");
-                }
-
-                const nextRates: Record<string, number> = { USD: 1 };
-                SUPPORTED_CURRENCIES.forEach((code) => {
-                    const rate = data.rates?.[code];
-                    if (typeof rate === "number" && Number.isFinite(rate) && rate > 0) {
-                        nextRates[code] = rate;
-                    }
-                });
-
-                setExchangeRates((currentRates) => ({
-                    ...currentRates,
-                    ...nextRates,
-                    USD: 1,
-                }));
-                setLastFetchedAt(now);
-                return nextRates;
-            } catch {
-                const fallbackRates = { USD: 1 };
-                setExchangeRates(fallbackRates);
-                setCurrencyState("INR");
-                return fallbackRates;
-            } finally {
-                setIsFetchingRates(false);
-            }
-        },
-        [cacheDurationMs, exchangeRates, isFetchingRates, lastFetchedAt]
-    );
-
-    useEffect(() => {
-        if (currency !== "USD") {
-            void fetchExchangeRates();
-        }
-    }, [currency, fetchExchangeRates]);
-
-    const normalizeAmountToUSD = useCallback(
-        async (amountInSelectedCurrency: number) => {
-            if (!Number.isFinite(amountInSelectedCurrency) || amountInSelectedCurrency <= 0) {
-                return 0;
-            }
-
-            if (currency === "USD") {
-                return amountInSelectedCurrency;
-            }
-
-            const currentRate = exchangeRates[currency];
-            if (Number.isFinite(currentRate) && currentRate > 0) {
-                return amountInSelectedCurrency / currentRate;
-            }
-
-            const latestRates = await fetchExchangeRates(true);
-            const latestRate = latestRates[currency];
-
-            if (!Number.isFinite(latestRate) || latestRate <= 0) {
-                throw new Error(`Exchange rate unavailable for ${currency}.`);
-            }
-
-            return amountInSelectedCurrency / latestRate;
-        },
-        [currency, exchangeRates, fetchExchangeRates]
-    );
-
-    const addExpense = (amountInUSD: number, category: string) => {
+    const addExpense = (amount: number, category: string) => {
         const normalizedAmount =
-            Number.isFinite(amountInUSD) && amountInUSD > 0 ? amountInUSD : 0;
+            Number.isFinite(amount) && amount > 0 ? Number(amount) : 0;
 
         const newExpense: Expense = {
             id: Date.now().toString(),
@@ -247,10 +127,10 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
         setExpenses([]);
     };
 
-    const setBudget = (amountInUSD: number) => {
+    const setBudget = (amount: number) => {
         const normalizedAmount =
-            Number.isFinite(amountInUSD) && amountInUSD > 0 ? amountInUSD : 0;
-        setBudgetInUSD(normalizedAmount);
+            Number.isFinite(amount) && amount > 0 ? Number(amount) : 0;
+        setBudgetAmount(normalizedAmount);
     };
 
     return (
@@ -265,11 +145,6 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
                 setIsDarkMode,
                 currency,
                 setCurrency,
-                exchangeRates,
-                isFetchingRates,
-                fetchExchangeRates,
-                normalizeAmountToUSD,
-                convertFromUSD,
                 formatAmount,
             }}
         >

@@ -22,7 +22,7 @@ const mapCategoryDocument = (category: { name: string; icon: string }): Category
 });
 
 export default function AddExpense() {
-  const { isDarkMode, currency, addExpense, normalizeAmountToUSD } = useContext(ExpenseContext);
+  const { isDarkMode, currency, addExpense } = useContext(ExpenseContext);
   const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<CategoryOption | null>(null);
   const [amount, setAmount] = useState("");
@@ -123,21 +123,15 @@ export default function AddExpense() {
 
     try {
       const date = new Date().toISOString();
-      const normalizedAmount = Number(await normalizeAmountToUSD(parsedAmount));
-
-      if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
-        throw new Error("Expense amount could not be normalized.");
-      }
-
-      console.log("Adding expense:", parsedAmount);
+      console.log("Saving amount:", parsedAmount);
 
       await createExpense({
-        amount: Number(normalizedAmount),
+        amount: Number(parsedAmount),
         category: selectedCategory.name,
         date,
       });
 
-      addExpense(normalizedAmount, selectedCategory.name);
+      addExpense(Number(parsedAmount), selectedCategory.name);
       closeExpenseModal();
       router.replace("/home");
     } catch (error) {

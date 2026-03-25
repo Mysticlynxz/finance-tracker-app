@@ -26,8 +26,6 @@ export default function SettingsScreen() {
     currency,
     setCurrency,
     setBudget: setLocalBudget,
-    isFetchingRates,
-    fetchExchangeRates,
     formatAmount,
   } = useContext(ExpenseContext);
   const [isCurrencyMenuOpen, setIsCurrencyMenuOpen] = useState(false);
@@ -55,11 +53,19 @@ export default function SettingsScreen() {
       };
 
   const handleCurrencySelect = (selectedCurrency: string) => {
+    if (
+      selectedCurrency !== currency &&
+      (expenses.length > 0 || budget > 0)
+    ) {
+      Alert.alert(
+        "Currency locked",
+        "Reset existing expenses and budget before changing currency so stored amounts stay consistent."
+      );
+      return;
+    }
+
     setCurrency(selectedCurrency);
     setIsCurrencyMenuOpen(false);
-    if (selectedCurrency !== "USD") {
-      void fetchExchangeRates();
-    }
   };
 
   const performResetData = async () => {
@@ -192,9 +198,6 @@ export default function SettingsScreen() {
                 </View>
               </View>
               <View className="flex-row items-center gap-2">
-                {isFetchingRates && (
-                  <ActivityIndicator size="small" color={colors.secondary} />
-                )}
                 <Ionicons
                   name={isCurrencyMenuOpen ? "chevron-up" : "chevron-down"}
                   size={18}

@@ -96,16 +96,14 @@ const getDisplayCurrency = (value) => {
   return value.trim().toUpperCase();
 };
 
-const getPromptAmount = (value, exchangeRate) => {
+const getPromptAmount = (value) => {
   const numericValue = Number(value);
 
   if (!Number.isFinite(numericValue)) {
     return 0;
   }
 
-  const numericRate = Number(exchangeRate);
-  const resolvedRate = Number.isFinite(numericRate) && numericRate > 0 ? numericRate : 1;
-  return Math.round(numericValue * resolvedRate * 100) / 100;
+  return Math.round(numericValue * 100) / 100;
 };
 
 const createAppwriteClient = (req) => {
@@ -212,10 +210,6 @@ export default async ({ req, res, log, error }) => {
         ? body.message.trim()
         : "Give one practical budgeting tip.";
     const displayCurrency = getDisplayCurrency(body.currency);
-    const exchangeRate =
-      Number.isFinite(Number(body.exchangeRate)) && Number(body.exchangeRate) > 0
-        ? Number(body.exchangeRate)
-        : 1;
     const currencySymbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
     const apiKey = process.env.GEMINI_API_KEY?.trim();
 
@@ -238,14 +232,12 @@ export default async ({ req, res, log, error }) => {
             .map(
               (expense) =>
                 `${expense.category}: ${currencySymbol}${getPromptAmount(
-                  expense.amount,
-                  exchangeRate
+                  expense.amount
                 )}`
             )
             .join("\n")
         : "No recent expenses found.";
-    const budgetAmount =
-      budget === null ? null : getPromptAmount(budget, exchangeRate);
+    const budgetAmount = budget === null ? null : getPromptAmount(budget);
     const budgetLine =
       budgetAmount === null ? "Not set" : `${currencySymbol}${budgetAmount}`;
     const prompt = `
@@ -258,6 +250,7 @@ ${formattedExpenses}
 User Question: ${message}
 
 Give short, practical, personalized financial advice based on the user's spending.
+Use the exact amounts provided. Do not convert currencies or infer exchange rates.
 `.trim();
 
     log("Generating advice for user: " + userId);
