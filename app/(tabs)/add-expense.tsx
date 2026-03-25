@@ -22,7 +22,7 @@ const mapCategoryDocument = (category: { name: string; icon: string }): Category
 });
 
 export default function AddExpense() {
-  const { isDarkMode, currency, addExpense } = useContext(ExpenseContext);
+  const { isDarkMode, currency, addExpense, convertToINR } = useContext(ExpenseContext);
   const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<CategoryOption | null>(null);
   const [amount, setAmount] = useState("");
@@ -123,15 +123,19 @@ export default function AddExpense() {
 
     try {
       const date = new Date().toISOString();
-      console.log("Saving amount:", parsedAmount);
+      const amountInINR = convertToINR(parsedAmount);
+
+      if (!Number.isFinite(amountInINR) || amountInINR <= 0) {
+        throw new Error("Expense amount could not be converted to INR.");
+      }
 
       await createExpense({
-        amount: Number(parsedAmount),
+        amount: Number(amountInINR),
         category: selectedCategory.name,
         date,
       });
 
-      addExpense(Number(parsedAmount), selectedCategory.name);
+      addExpense(amountInINR, selectedCategory.name);
       closeExpenseModal();
       router.replace("/home");
     } catch (error) {

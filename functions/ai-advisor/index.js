@@ -2,41 +2,51 @@ import { Client, Databases, Query } from "appwrite";
 import fetch from "node-fetch";
 
 const FRIENDLY_FALLBACK =
-  "I'm having trouble right now, but hey — tracking expenses already puts you ahead of most people 😄";
-const NO_RESPONSE_FALLBACK = FRIENDLY_FALLBACK;
-const ERROR_FALLBACK = FRIENDLY_FALLBACK;
+  "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
+const NO_EXPENSES_FALLBACK =
+  "Add some expenses first \u2014 your wallet is still a mystery \u{1F604}";
 const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+const DEFAULT_DISPLAY_CURRENCY = "INR";
+const RECENT_EXPENSE_LIMIT = 8;
+
+// DATABASE RULE:
+// Always store raw INR values ONLY.
+// Never convert before saving.
+//
+// UI RULE:
+// Convert currency ONLY for display.
+//
+// AI RULE:
+// Always respond in the selected currency.
+const currencyConfig = {
+  INR: { symbol: "\u20B9", rate: 1 },
+  USD: { symbol: "$", rate: 83 },
+  EUR: { symbol: "\u20AC", rate: 90 },
+  GBP: { symbol: "\u00A3", rate: 105 },
+  JPY: { symbol: "\u00A5", rate: 0.55 },
+  CNY: { symbol: "\u00A5", rate: 11.5 },
+  AUD: { symbol: "A$", rate: 55 },
+  CAD: { symbol: "C$", rate: 60 },
+  CHF: { symbol: "CHF", rate: 92 },
+  SGD: { symbol: "S$", rate: 62 },
+  AED: { symbol: "\u062F.\u0625", rate: 22.5 },
+  SAR: { symbol: "\uFDFC", rate: 22 },
+};
+
 const SYSTEM_PROMPT = `
 You are a smart and slightly humorous financial advisor inside a budgeting app.
 Give short, practical, and personalized advice based on the user's expenses and budget.
-Use light humor occasionally (friendly, not sarcastic or offensive).
-Keep responses clear, helpful, and engaging.
+Use light humor occasionally, but keep it friendly and useful.
 
 Response style rules:
 - Always reply as a markdown bullet list with 3 to 5 bullet points maximum.
 - Keep each bullet short, practical, and tied to the user's budget or spending categories.
-- You may add one small humorous line when it fits, such as "Your wallet is crying 😅" or "That coffee habit is expensive 👀".
-- Avoid overdoing jokes, emojis, or playful comments.
-- Example tone: "Looks like food is taking a big bite out of your wallet 🍔😅 — try cutting down a bit!"
+- Add only light humor when it fits, for example "Your wallet is crying \u{1F605}" or "That coffee habit is expensive \u{1F440}".
+- Do not overdo jokes, sarcasm, or emojis.
 `.trim();
-const RUPEE_SYMBOL = "\u20B9";
-const DEFAULT_DISPLAY_CURRENCY = "INR";
-const CURRENCY_SYMBOLS = {
-  INR: RUPEE_SYMBOL,
-  USD: "$",
-  EUR: "\u20AC",
-  GBP: "\u00A3",
-  JPY: "\u00A5",
-  CNY: "\u00A5",
-  AUD: "A$",
-  CAD: "C$",
-  CHF: "Fr.",
-  SGD: "S$",
-  AED: "\u062F.\u0625",
-  SAR: "\uFDFC",
-};
+
 const APPWRITE_ENDPOINT =
   process.env.APPWRITE_ENDPOINT?.trim() ||
   process.env.APPWRITE_FUNCTION_API_ENDPOINT?.trim() ||
@@ -51,9 +61,16 @@ const APPWRITE_EXPENSES_COLLECTION_ID =
   process.env.APPWRITE_EXPENSES_COLLECTION_ID?.trim() || "expenses";
 const APPWRITE_BUDGETS_COLLECTION_ID =
   process.env.APPWRITE_BUDGETS_COLLECTION_ID?.trim() || "budgets";
-const RECENT_EXPENSE_LIMIT = 8;
 
 const parseRequestBody = (req) => {
+  if (typeof req?.body === "string") {
+    try {
+      return JSON.parse(req.body);
+    } catch {
+      return {};
+    }
+  }
+
   const rawBody = req?.body ?? req?.bodyText ?? req?.bodyJson ?? {};
 
   if (typeof rawBody === "string") {
@@ -64,11 +81,7 @@ const parseRequestBody = (req) => {
     }
   }
 
-  if (rawBody && typeof rawBody === "object") {
-    return rawBody;
-  }
-
-  return {};
+  return rawBody && typeof rawBody === "object" ? rawBody : {};
 };
 
 const getHeader = (req, headerName) => {
@@ -89,22 +102,42 @@ const getHeader = (req, headerName) => {
 };
 
 const getDisplayCurrency = (value) => {
-  if (typeof value !== "string" || !value.trim()) {
-    return DEFAULT_DISPLAY_CURRENCY;
+  const normalized =
+    typeof value === "string" ? value.trim().toUpperCase() : DEFAULT_DISPLAY_CURRENCY;
+
+  if (Object.prototype.hasOwnProperty.call(currencyConfig, normalized)) {
+    return normalized;
   }
 
-  return value.trim().toUpperCase();
+  return DEFAULT_DISPLAY_CURRENCY;
 };
 
-const getPromptAmount = (value) => {
+const getCurrencySettings = (currency) => currencyConfig[getDisplayCurrency(currency)];
+
+const sanitizeAmount = (value) => {
   const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+};
 
-  if (!Number.isFinite(numericValue)) {
-    return 0;
+const roundAmount = (value) => Math.round(sanitizeAmount(value) * 100) / 100;
+
+function convertFromINR(amount, currency) {
+  const numericAmount = sanitizeAmount(amount);
+  const config = getCurrencySettings(currency);
+
+  if (!Number.isFinite(config.rate) || config.rate <= 0) {
+    return roundAmount(numericAmount);
   }
 
-  return Math.round(numericValue * 100) / 100;
-};
+  return roundAmount(numericAmount / config.rate);
+}
+
+function formatCurrency(amount, currency) {
+  const config = getCurrencySettings(currency);
+  const safeAmount = roundAmount(amount);
+
+  return `${config.symbol}${safeAmount.toFixed(2)}`;
+}
 
 const createAppwriteClient = (req) => {
   const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
@@ -127,7 +160,7 @@ const createAppwriteClient = (req) => {
     .setJWT(jwt);
 };
 
-const getFinancialContext = async (req, log) => {
+const getFinancialContext = async (req) => {
   const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
 
   if (!jwt) {
@@ -139,8 +172,6 @@ const getFinancialContext = async (req, log) => {
   if (!userId) {
     throw new Error("x-appwrite-user-id header is missing.");
   }
-
-  log("JWT: " + jwt);
 
   const client = createAppwriteClient(req);
 
@@ -167,25 +198,16 @@ const getFinancialContext = async (req, log) => {
     }),
   ]);
 
-  log("RAW expenses from DB: " + JSON.stringify(expenseResponse.documents));
-
   const expenses = expenseResponse.documents.map((expense) => ({
     category:
       typeof expense.category === "string" && expense.category.trim()
         ? expense.category.trim()
         : "Others",
-    amount: expense.amount,
+    amount: sanitizeAmount(expense.amount),
   }));
 
   const budgetDocument = budgetResponse.documents[0] ?? null;
-  const budget = budgetDocument ? budgetDocument.amount : null;
-
-  log("Fetched expenses: " + JSON.stringify(expenses));
-  log("Fetched budget: " + JSON.stringify(budget));
-
-  if (!expenses || expenses.length === 0) {
-    log("No expenses found");
-  }
+  const budget = budgetDocument ? sanitizeAmount(budgetDocument.amount) : null;
 
   return {
     userId,
@@ -199,9 +221,7 @@ export default async ({ req, res, log, error }) => {
     const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
 
     if (!jwt) {
-      return res.json({
-        reply: UNAUTHENTICATED_FALLBACK,
-      });
+      return res.json({ reply: UNAUTHENTICATED_FALLBACK });
     }
 
     const body = parseRequestBody(req);
@@ -209,53 +229,61 @@ export default async ({ req, res, log, error }) => {
       typeof body.message === "string" && body.message.trim()
         ? body.message.trim()
         : "Give one practical budgeting tip.";
-    const displayCurrency = getDisplayCurrency(body.currency);
-    const currencySymbol = CURRENCY_SYMBOLS[displayCurrency] ?? `${displayCurrency} `;
+    const currency = getDisplayCurrency(body.currency);
     const apiKey = process.env.GEMINI_API_KEY?.trim();
 
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY is missing.");
     }
 
-    const financialContext = await getFinancialContext(req, log);
+    const financialContext = await getFinancialContext(req);
 
     if (!financialContext) {
-      return res.json({
-        reply: UNAUTHENTICATED_FALLBACK,
-      });
+      return res.json({ reply: UNAUTHENTICATED_FALLBACK });
     }
 
     const { userId, budget, expenses } = financialContext;
-    const formattedExpenses =
-      expenses.length > 0
-        ? expenses
-            .map(
-              (expense) =>
-                `${expense.category}: ${currencySymbol}${getPromptAmount(
-                  expense.amount
-                )}`
-            )
-            .join("\n")
-        : "No recent expenses found.";
-    const budgetAmount = budget === null ? null : getPromptAmount(budget);
-    const budgetLine =
-      budgetAmount === null ? "Not set" : `${currencySymbol}${budgetAmount}`;
-    const prompt = `
-Display Currency: ${displayCurrency}
-User Budget: ${budgetLine}
 
-Recent Expenses:
+    if (!expenses || expenses.length === 0) {
+      return res.json({ reply: NO_EXPENSES_FALLBACK });
+    }
+
+    const formattedExpenses = expenses
+      .map((expense) => {
+        const convertedAmount = convertFromINR(expense.amount, currency);
+        return `${expense.category}: ${formatCurrency(convertedAmount, currency)}`;
+      })
+      .join("\n");
+
+    const formattedBudget =
+      budget === null
+        ? "Not set"
+        : formatCurrency(convertFromINR(budget, currency), currency);
+
+    const prompt = `
+You are a smart and slightly humorous financial advisor inside a budgeting app.
+
+User preferred currency: ${currency}
+
+IMPORTANT RULES:
+- All values are already converted to ${currency}
+- DO NOT use INR in your response
+- ALWAYS use the correct currency symbol for ${currency}
+- Keep responses short and practical in 3 to 5 bullet points
+- Add light friendly humor occasionally
+
+Budget: ${formattedBudget}
+
+Expenses:
 ${formattedExpenses}
 
-User Question: ${message}
+User Question:
+${message}
 
-Give short, practical, personalized financial advice based on the user's spending.
-Use the exact amounts provided. Do not convert currencies or infer exchange rates.
+Give personalized financial advice based on the data.
 `.trim();
 
-    log("Generating advice for user: " + userId);
-    log("Formatted expenses: " + formattedExpenses);
-    log("Final prompt: " + prompt);
+    log(`Generating advice for user ${userId} in ${currency}`);
 
     const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
       method: "POST",
@@ -280,27 +308,22 @@ Use the exact amounts provided. Do not convert currencies or infer exchange rate
     try {
       data = rawResponse ? JSON.parse(rawResponse) : {};
     } catch {
-      throw new Error("Failed to parse Gemini response JSON: " + rawResponse);
+      throw new Error(`Failed to parse Gemini response JSON: ${rawResponse}`);
     }
-
-    log("Gemini response: " + JSON.stringify(data));
 
     if (!response.ok) {
       throw new Error(`Gemini API error (${response.status}): ${JSON.stringify(data)}`);
     }
 
-    let reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!reply || typeof reply !== "string" || !reply.trim()) {
-      reply = NO_RESPONSE_FALLBACK;
+      return res.json({ reply: FRIENDLY_FALLBACK });
     }
 
     return res.json({ reply: reply.trim() });
   } catch (err) {
-    error("Gemini error: " + (err?.message || String(err)));
-
-    return res.json({
-      reply: ERROR_FALLBACK,
-    });
+    error(`Gemini error: ${err?.message || String(err)}`);
+    return res.json({ reply: FRIENDLY_FALLBACK });
   }
 };

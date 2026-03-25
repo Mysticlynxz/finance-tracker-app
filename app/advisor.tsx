@@ -29,7 +29,8 @@ export default function AdvisorScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "Ask me about spending, budgets, or saving moves. I’ll keep it useful and only slightly judge that snack budget 😄",
+      text:
+        "Ask me about spending, budgets, or saving moves. I'll respond in your selected currency and only slightly judge that snack budget \u{1F604}",
     },
   ]);
   const [input, setInput] = useState("");

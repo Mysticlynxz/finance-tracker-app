@@ -9,6 +9,7 @@ import {
   Models,
   Query,
 } from "appwrite";
+import { normalizeCurrencyCode } from "../constants/currency";
 
 const APPWRITE_ENDPOINT = "https://cloud.appwrite.io/v1";
 const APPWRITE_PROJECT_ID = "69a4662b001f58493387";
@@ -77,9 +78,9 @@ export interface BudgetDocument extends Models.Document {
 }
 
 // IMPORTANT:
-// Always store raw currency values (rupees)
-// Never scale (no /100 or *100)
-// Only format in UI
+// Always store raw currency values ONLY in INR.
+// Never convert or scale before writing anything except selected currency -> INR.
+// Convert only for UI display and AI responses.
 
 const RESET_BATCH_SIZE = 100;
 
@@ -192,8 +193,6 @@ export const createExpense = async (
       throw new Error("Expense amount must be a valid number greater than 0.");
     }
 
-    console.log("Saving amount:", normalizedAmount);
-
     return await databases.createDocument<ExpenseDocument>({
       databaseId: APPWRITE_DATABASE_ID,
       collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
@@ -222,14 +221,10 @@ export const getExpenses = async (): Promise<ExpenseDocument[]> => {
       queries: [Query.equal("userId", user.$id)],
     });
 
-    return response.documents.map((expense) => {
-      console.log("Fetched from DB:", expense.amount);
-
-      return {
-        ...expense,
-        amount: parseNumericAmount(expense.amount, `expense:${expense.$id}`),
-      };
-    });
+    return response.documents.map((expense) => ({
+      ...expense,
+      amount: parseNumericAmount(expense.amount, `expense:${expense.$id}`),
+    }));
   } catch (error) {
     console.error("getExpenses failed", error);
     throw error;
@@ -256,8 +251,6 @@ export const setBudget = async (
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
       throw new Error("Budget amount must be a valid number greater than 0.");
     }
-
-    console.log("Saving amount:", normalizedAmount);
 
     const existingBudgets = await databases.listDocuments<BudgetDocument>({
       databaseId: APPWRITE_DATABASE_ID,
@@ -311,8 +304,6 @@ export const getBudget = async (): Promise<number | null> => {
       return null;
     }
 
-    console.log("Fetched from DB:", budget.amount);
-
     return parseNumericAmount(budget.amount, `budget:${budget.$id}`);
   } catch (error) {
     const message = getErrorMessage(error);
@@ -352,8 +343,7 @@ export const askFinancialAdvisor = async (
     return AI_ADVISOR_UNAVAILABLE_MESSAGE;
   }
 
-  const normalizedCurrency =
-    typeof currency === "string" && currency.trim() ? currency.trim().toUpperCase() : "INR";
+  const normalizedCurrency = normalizeCurrencyCode(currency);
 
   try {
     const execution = await functions.createExecution({

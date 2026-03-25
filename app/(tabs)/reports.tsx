@@ -30,7 +30,8 @@ const formatDateLabel = (dateKey: string) => {
 };
 
 export default function Reports() {
-  const { isDarkMode, formatAmount, currency } = useContext(ExpenseContext);
+  const { isDarkMode, formatAmount, convertFromINR, currency } =
+    useContext(ExpenseContext);
   const [expenses, setExpenses] = useState<ExpenseDocument[]>([]);
   const [budget, setBudgetState] = useState<number>(0);
   const screenWidth = Dimensions.get("window").width;
@@ -109,19 +110,21 @@ export default function Reports() {
   );
   const remainingBudget = Math.max(0, budget - totalExpense);
   const budgetUsagePercentage = budget > 0 ? (totalExpense / budget) * 100 : null;
+  const convertedTotalExpense = convertFromINR(totalExpense);
+  const convertedRemainingBudget = convertFromINR(remainingBudget);
 
   const pieData = useMemo(
     () => [
       {
         name: "Spent",
-        amount: Number(totalExpense.toFixed(2)),
+        amount: Number(convertedTotalExpense.toFixed(2)),
         color: colors.spent,
         legendFontColor: colors.secondary,
         legendFontSize: 13,
       },
       {
         name: "Remaining",
-        amount: Number(remainingBudget.toFixed(2)),
+        amount: Number(convertedRemainingBudget.toFixed(2)),
         color: colors.remaining,
         legendFontColor: colors.secondary,
         legendFontSize: 13,
@@ -131,8 +134,8 @@ export default function Reports() {
       colors.remaining,
       colors.secondary,
       colors.spent,
-      remainingBudget,
-      totalExpense,
+      convertedRemainingBudget,
+      convertedTotalExpense,
     ]
   );
 
@@ -164,7 +167,7 @@ export default function Reports() {
   }, [dailyTrendData]);
 
   const formatYAxisTick = (value: number) => {
-    return Number(value).toFixed(0);
+    return convertFromINR(value).toFixed(0);
   };
 
   const maxTrendValue = useMemo(

@@ -1,10 +1,11 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { useContext, useState } from "react";
+import { useCallback, useContext, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import { ExpenseContext } from "../../Context/ExpenseContext";
 import { router } from "expo-router";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { setBudget } from "../../lib/appwrite";
+import { getBudget, setBudget } from "../../lib/appwrite";
 
 export default function Budget() {
   const {
@@ -12,10 +13,35 @@ export default function Budget() {
     isDarkMode,
     currency,
     formatAmount,
-    budget,
+    convertToINR,
   } =
     useContext(ExpenseContext);
   const [value, setValue] = useState("");
+  const [currentBudget, setCurrentBudget] = useState<number>(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      const loadBudget = async () => {
+        try {
+          const budgetFromDb = await getBudget();
+
+          if (isActive) {
+            setCurrentBudget(budgetFromDb ?? 0);
+          }
+        } catch (error) {
+          console.error("Failed to load budget", error);
+        }
+      };
+
+      void loadBudget();
+
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
   const colors = isDarkMode
     ? {
         screen: "#020617",
@@ -46,9 +72,15 @@ export default function Budget() {
     }
 
     try {
-      console.log("Saving amount:", parsedBudget);
-      await setBudget({ amount: Number(parsedBudget) });
-      setBudgetLocal(Number(parsedBudget));
+      const budgetInINR = convertToINR(parsedBudget);
+
+      if (!Number.isFinite(budgetInINR) || budgetInINR <= 0) {
+        throw new Error("Budget amount could not be converted to INR.");
+      }
+
+      await setBudget({ amount: Number(budgetInINR) });
+      setBudgetLocal(budgetInINR);
+      setCurrentBudget(budgetInINR);
       router.replace("/home");
     } catch (error) {
       console.error("Failed to save budget", error);
@@ -80,7 +112,7 @@ export default function Budget() {
         style={{ backgroundColor: colors.card, borderColor: colors.border }}
       >
         <Text className="mb-2 text-xs" style={{ color: colors.secondary }}>
-          Current Budget: {formatAmount(budget)}
+          Current Budget: {formatAmount(currentBudget)}
         </Text>
         <Text className="mb-2 text-sm font-semibold" style={{ color: colors.secondary }}>
           Monthly Budget Amount ({currency})

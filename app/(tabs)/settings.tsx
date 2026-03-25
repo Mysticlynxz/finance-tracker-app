@@ -1,6 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { type Href, router } from "expo-router";
-import { useContext, useState } from "react";
+import { useCallback, useContext, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   ActivityIndicator,
   Alert,
@@ -12,14 +13,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext, SUPPORTED_CURRENCIES } from "../../Context/ExpenseContext";
-import { logoutUser, resetAllData } from "../../lib/appwrite";
+import { getBudget, getExpenses, logoutUser, resetAllData } from "../../lib/appwrite";
 
 const LOGIN_ROUTE = "/login" as Href;
 
 export default function SettingsScreen() {
   const {
-    budget,
-    expenses,
     clearExpenses: clearLocalExpenses,
     isDarkMode,
     setIsDarkMode,
@@ -31,6 +30,38 @@ export default function SettingsScreen() {
   const [isCurrencyMenuOpen, setIsCurrencyMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isResettingData, setIsResettingData] = useState(false);
+  const [storedBudget, setStoredBudget] = useState<number>(0);
+  const [storedExpenseCount, setStoredExpenseCount] = useState(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      const loadSettingsData = async () => {
+        try {
+          const [budgetFromDb, expensesFromDb] = await Promise.all([
+            getBudget(),
+            getExpenses(),
+          ]);
+
+          if (!isActive) {
+            return;
+          }
+
+          setStoredBudget(budgetFromDb ?? 0);
+          setStoredExpenseCount(expensesFromDb.length);
+        } catch (error) {
+          console.error("Failed to load settings data", error);
+        }
+      };
+
+      void loadSettingsData();
+
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
 
   const colors = isDarkMode
     ? {
@@ -53,17 +84,6 @@ export default function SettingsScreen() {
       };
 
   const handleCurrencySelect = (selectedCurrency: string) => {
-    if (
-      selectedCurrency !== currency &&
-      (expenses.length > 0 || budget > 0)
-    ) {
-      Alert.alert(
-        "Currency locked",
-        "Reset existing expenses and budget before changing currency so stored amounts stay consistent."
-      );
-      return;
-    }
-
     setCurrency(selectedCurrency);
     setIsCurrencyMenuOpen(false);
   };
@@ -79,6 +99,8 @@ export default function SettingsScreen() {
       await resetAllData();
       clearLocalExpenses();
       setLocalBudget(0);
+      setStoredBudget(0);
+      setStoredExpenseCount(0);
       Alert.alert("Reset complete", "All expenses and budget data have been deleted.", [
         {
           text: "OK",
@@ -249,7 +271,7 @@ export default function SettingsScreen() {
                   Edit Monthly Budget
                 </Text>
                 <Text className="text-xs" style={{ color: colors.secondary }}>
-                  Current: {formatAmount(budget)}
+                  Current: {formatAmount(storedBudget)}
                 </Text>
               </View>
             </View>
@@ -292,7 +314,7 @@ export default function SettingsScreen() {
             Data
           </Text>
           <Text className="mb-3 text-sm" style={{ color: colors.secondary }}>
-            Synced expenses available locally: {expenses.length}
+            Synced expenses in Appwrite: {storedExpenseCount}
           </Text>
           <Pressable
             onPress={handleResetData}
