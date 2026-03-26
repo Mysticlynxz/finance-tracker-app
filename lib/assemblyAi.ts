@@ -120,7 +120,7 @@ export const requestAssemblyAITranscript = async (
     headers: createHeaders("application/json"),
     body: JSON.stringify({
       audio_url: trimmedUploadUrl,
-      speech_model: "universal-2",
+      speech_models: ["universal-2"],
     }),
   });
 
