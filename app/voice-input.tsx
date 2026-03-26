@@ -4,11 +4,33 @@ import { useContext } from "react";
 import { Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
+import { transcribeAudioUriWithAssemblyAI } from "../lib/assemblyAi";
 import { useAudioRecorder } from "../lib/useAudioRecorder";
 
 export default function VoiceInputScreen() {
   const { isDarkMode } = useContext(ExpenseContext);
   const { recording, audioUri, startRecording, stopRecording } = useAudioRecorder();
+
+  const sendToSpeechAPI = async (uri: string) => {
+    console.log("ENTERED API FUNCTION");
+    await transcribeAudioUriWithAssemblyAI(uri);
+  };
+
+  const handleRecordingPress = async () => {
+    if (!recording) {
+      await startRecording();
+      return;
+    }
+
+    const uri = await stopRecording();
+
+    if (uri) {
+      console.log("Calling Speech API...");
+      await sendToSpeechAPI(uri);
+    } else {
+      console.log("No audio URI found");
+    }
+  };
 
   const colors = isDarkMode
     ? {
@@ -79,12 +101,7 @@ export default function VoiceInputScreen() {
 
           <Pressable
             onPress={() => {
-              if (recording) {
-                void stopRecording();
-                return;
-              }
-
-              void startRecording();
+              void handleRecordingPress();
             }}
             className="mt-8 min-w-[220px] items-center rounded-2xl px-6 py-4"
             style={{ backgroundColor: recording ? "#dc2626" : colors.accent }}
