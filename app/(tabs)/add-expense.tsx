@@ -270,8 +270,8 @@ export default function AddExpense() {
       <TouchableOpacity
         activeOpacity={0.9}
         onPress={() => {
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          router.push("/voice-input");
+          void Haptics.selectionAsync();
+          Alert.alert("Voice feature will be available soon");
         }}
         className="absolute bottom-8 right-6 h-16 w-16 items-center justify-center rounded-full bg-emerald-600"
         style={{

@@ -3,15 +3,33 @@ export interface CategoryOption {
   icon: string;
 }
 
-export const DEFAULT_CATEGORIES: CategoryOption[] = [
-  { name: "Food", icon: "🍔" },
-  { name: "Travel", icon: "🚗" },
-  { name: "Shopping", icon: "🛍️" },
-  { name: "Bills", icon: "💡" },
-  { name: "Health", icon: "💊" },
-  { name: "Entertainment", icon: "🎬" },
-  { name: "Education", icon: "📚" },
-  { name: "Groceries", icon: "🛒" },
-  { name: "Rent", icon: "🏠" },
-  { name: "Others", icon: "📦" },
-];
+export const DEFAULT_CATEGORY_NAMES = [
+  "Food",
+  "Groceries",
+  "Travel",
+  "Transport",
+  "Health",
+  "Entertainment",
+  "Shopping",
+  "Bills",
+  "Education",
+  "Other",
+] as const;
+
+const DEFAULT_CATEGORY_ICONS: Record<(typeof DEFAULT_CATEGORY_NAMES)[number], string> = {
+  Food: "🍔",
+  Groceries: "🛒",
+  Travel: "✈️",
+  Transport: "🚌",
+  Health: "💊",
+  Entertainment: "🎬",
+  Shopping: "🛍️",
+  Bills: "💡",
+  Education: "📚",
+  Other: "📦",
+};
+
+export const DEFAULT_CATEGORIES: CategoryOption[] = DEFAULT_CATEGORY_NAMES.map((name) => ({
+  name,
+  icon: DEFAULT_CATEGORY_ICONS[name],
+}));

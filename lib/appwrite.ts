@@ -20,6 +20,10 @@ const APPWRITE_AI_ADVISOR_FUNCTION_ID ="69a76eab00275ef10835";
 export const AI_ADVISOR_FALLBACK_RESPONSE =
   "I'm having trouble right now, but hey — tracking expenses already puts you ahead of most people 😄";
 const AI_ADVISOR_UNAVAILABLE_MESSAGE = AI_ADVISOR_FALLBACK_RESPONSE;
+const DEFAULT_EXPENSE_EXTRACTION_REPLY = JSON.stringify({
+  category: "Other",
+  amount: 0,
+});
 const PROJECT_PAUSED_ERROR_TEXT = "Project is paused due to inactivity";
 const PROJECT_PAUSED_RECOVERY_MESSAGE =
   "The backend is paused due to inactivity. Open Appwrite Console and restore this project, then try again.";
@@ -65,6 +69,11 @@ export interface SetBudgetInput {
   amount: number;
 }
 
+export interface ExpenseExtractionAiInput {
+  message: string;
+  validCategories: string[];
+}
+
 export interface ExpenseDocument extends Models.Document {
   amount: number;
   category: string;
@@ -75,11 +84,6 @@ export interface ExpenseDocument extends Models.Document {
 export interface BudgetDocument extends Models.Document {
   amount: number;
   userId: string;
-}
-
-export interface ParsedVoiceExpense {
-  amount: number;
-  category: string;
 }
 
 // IMPORTANT:
@@ -384,35 +388,25 @@ export const askFinancialAdvisor = async (message: string, currency?: string): P
   }
 };
 
-export const extractExpenseFromSpeech = async (
-  transcript: string
-): Promise<ParsedVoiceExpense> => {
-  const trimmedTranscript = transcript.trim();
+export const requestExpenseExtractionReply = async ({
+  message,
+  validCategories,
+}: ExpenseExtractionAiInput): Promise<string> => {
+  const trimmedMessage = message.trim();
 
-  if (!trimmedTranscript) {
-    throw new Error("Please say the expense first.");
+  if (!trimmedMessage) {
+    return DEFAULT_EXPENSE_EXTRACTION_REPLY;
   }
 
   try {
-    const reply = await executeAiFunction({
+    return await executeAiFunction({
       mode: "extract-expense",
-      message: trimmedTranscript,
+      message: trimmedMessage,
+      validCategories,
     });
-    const parsed = JSON.parse(reply) as {
-      amount?: unknown;
-      category?: unknown;
-    };
-
-    return {
-      amount: Number(parsed.amount),
-      category:
-        typeof parsed.category === "string" && parsed.category.trim()
-          ? parsed.category.trim()
-          : "Others",
-    };
   } catch (error) {
-    const message = getErrorMessage(error);
-    console.error("[Appwrite] extractExpenseFromSpeech failed:", message);
-    throw new Error("Couldn't understand that expense. Please try again.");
+    const errorMessage = getErrorMessage(error);
+    console.error("[Appwrite] requestExpenseExtractionReply failed:", errorMessage);
+    return DEFAULT_EXPENSE_EXTRACTION_REPLY;
   }
 };
