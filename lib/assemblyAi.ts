@@ -26,24 +26,28 @@ const getAssemblyAIApiKey = () => {
   return apiKey;
 };
 
-const getErrorMessage = async (response: Response) => {
+const parseJsonResponse = async <T>(response: Response): Promise<T> => {
+  const responseText = await response.text();
+
+  if (!responseText.trim()) {
+    return {} as T;
+  }
+
   try {
-    const data = (await response.json()) as { error?: unknown };
-
-    if (typeof data.error === "string" && data.error.trim()) {
-      return data.error;
-    }
-
-    return JSON.stringify(data);
+    return JSON.parse(responseText) as T;
   } catch {
-    try {
-      const text = await response.text();
-      return text.trim() || response.statusText || `Request failed with status ${response.status}.`;
-    } catch {
-      return response.statusText || `Request failed with status ${response.status}.`;
-    }
+    throw new Error(
+      responseText.trim() || `Expected a JSON response with status ${response.status}.`
+    );
   }
 };
+
+const getErrorMessage = (
+  response: Response,
+  data?: {
+    error?: string;
+  }
+) => data?.error?.trim() || response.statusText || `Request failed with status ${response.status}.`;
 
 const delay = (ms: number) =>
   new Promise<void>((resolve) => {
@@ -87,12 +91,12 @@ export const uploadAudioToAssemblyAI = async (audioUri: string): Promise<string>
     body: audioBlob,
   });
 
-  const uploadData = (await uploadResponse.json()) as AssemblyAIUploadResponse;
+  const uploadData = await parseJsonResponse<AssemblyAIUploadResponse>(uploadResponse);
 
   console.log("Upload response:", uploadData);
 
   if (!uploadResponse.ok) {
-    throw new Error(uploadData.error || `Upload failed with status ${uploadResponse.status}.`);
+    throw new Error(getErrorMessage(uploadResponse, uploadData));
   }
 
   if (!uploadData.upload_url) {
@@ -119,14 +123,12 @@ export const requestAssemblyAITranscript = async (
     }),
   });
 
-  const transcriptData = (await transcriptResponse.json()) as AssemblyAITranscriptResponse;
+  const transcriptData = await parseJsonResponse<AssemblyAITranscriptResponse>(transcriptResponse);
 
-  console.log("Transcript response:", transcriptData);
+  console.log("Transcript request:", transcriptData);
 
   if (!transcriptResponse.ok) {
-    throw new Error(
-      transcriptData.error || `Transcript request failed with status ${transcriptResponse.status}.`
-    );
+    throw new Error(getErrorMessage(transcriptResponse, transcriptData));
   }
 
   if (!transcriptData.id) {
@@ -150,18 +152,18 @@ export const pollAssemblyAITranscript = async (
   }
 
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    await delay(TRANSCRIPT_POLL_INTERVAL_MS);
-
     const pollingResponse = await fetch(`${ASSEMBLYAI_BASE_URL}/transcript/${trimmedTranscriptId}`, {
       method: "GET",
       headers: createHeaders(),
     });
 
-    if (!pollingResponse.ok) {
-      throw new Error(await getErrorMessage(pollingResponse));
-    }
+    const pollingData = await parseJsonResponse<AssemblyAITranscriptResponse>(pollingResponse);
 
-    const pollingData = (await pollingResponse.json()) as AssemblyAITranscriptResponse;
+    console.log("Polling result:", pollingData);
+
+    if (!pollingResponse.ok) {
+      throw new Error(getErrorMessage(pollingResponse, pollingData));
+    }
 
     if (pollingData.status === "completed") {
       return pollingData;
@@ -170,6 +172,10 @@ export const pollAssemblyAITranscript = async (
     if (pollingData.status === "error") {
       throw new Error(pollingData.error || "AssemblyAI transcription failed.");
     }
+
+    if (attempt < MAX_POLL_ATTEMPTS - 1) {
+      await delay(TRANSCRIPT_POLL_INTERVAL_MS);
+    }
   }
 
   throw new Error("AssemblyAI transcription timed out before completion.");
@@ -177,17 +183,26 @@ export const pollAssemblyAITranscript = async (
 
 export const transcribeAudioUriWithAssemblyAI = async (audioUri: string): Promise<string> => {
   try {
-    const uploadUrl = await uploadAudioToAssemblyAI(audioUri);
+    const trimmedAudioUri = audioUri.trim();
+
+    if (!trimmedAudioUri) {
+      throw new Error("Audio URI is required.");
+    }
+
+    console.log("Audio URI:", trimmedAudioUri);
+
+    const uploadUrl = await uploadAudioToAssemblyAI(trimmedAudioUri);
     const transcriptData = await requestAssemblyAITranscript(uploadUrl);
-    const finalTranscript =
-      transcriptData.status === "completed"
-        ? transcriptData
-        : await pollAssemblyAITranscript(transcriptData.id ?? "");
-    const text = finalTranscript.text?.trim() ?? "";
 
-    console.log("Final text:", text);
+    if (!transcriptData.id) {
+      throw new Error("AssemblyAI transcript response did not include an id.");
+    }
 
-    return text;
+    const pollData = await pollAssemblyAITranscript(transcriptData.id);
+
+    console.log("Final text:", pollData.text);
+
+    return pollData.text?.trim() ?? "";
   } catch (error) {
     const message = error instanceof Error ? error.message : "AssemblyAI transcription failed.";
     console.error("[AssemblyAI] Speech-to-text failed:", message);
