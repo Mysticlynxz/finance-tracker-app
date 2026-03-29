@@ -2,11 +2,13 @@ import { Audio } from "expo-av";
 import { useEffect, useRef, useState } from "react";
 
 export function useAudioRecorder() {
+  const MIN_RECORDING_MS = 600;
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [audioUri, setAudioUri] = useState<string | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const startPromiseRef = useRef<Promise<void> | null>(null);
   const isStoppingRef = useRef(false);
+  const recordingStartedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     recordingRef.current = recording;
@@ -60,13 +62,39 @@ export function useAudioRecorder() {
           playsInSilentModeIOS: true,
         });
 
-        const { recording: newRecording } = await Audio.Recording.createAsync(
-          Audio.RecordingOptionsPresets.HIGH_QUALITY
-        );
+        const newRecording = new Audio.Recording();
+        await newRecording.prepareToRecordAsync({
+          android: {
+            extension: ".m4a",
+            outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+            audioEncoder: Audio.AndroidAudioEncoder.AAC,
+            sampleRate: 44100,
+            numberOfChannels: 1,
+            bitRate: 128000,
+          },
+          ios: {
+            extension: ".m4a",
+            outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+            audioQuality: Audio.IOSAudioQuality.HIGH,
+            sampleRate: 44100,
+            numberOfChannels: 1,
+            bitRate: 128000,
+            linearPCMBitDepth: 16,
+            linearPCMIsBigEndian: false,
+            linearPCMIsFloat: false,
+          },
+          web: {
+            mimeType: "audio/webm",
+            bitsPerSecond: 128000,
+          },
+          isMeteringEnabled: false,
+        });
+        await newRecording.startAsync();
 
         const status = await newRecording.getStatusAsync();
         console.log("[AudioRecorder] Recording started. canRecord:", status.canRecord);
 
+        recordingStartedAtRef.current = Date.now();
         recordingRef.current = newRecording;
         setAudioUri(null);
         setRecording(newRecording);
@@ -92,6 +120,7 @@ export function useAudioRecorder() {
     }
 
     isStoppingRef.current = true;
+    let activeRecording: Audio.Recording | null = null;
 
     try {
       if (!recordingRef.current && startPromiseRef.current) {
@@ -99,39 +128,67 @@ export function useAudioRecorder() {
         await startPromiseRef.current;
       }
 
-      const activeRecording = recordingRef.current;
+      activeRecording = recordingRef.current;
 
       if (!activeRecording) {
         console.log("[AudioRecorder] No active recording to stop");
         return null;
       }
 
+      const startedAt = recordingStartedAtRef.current;
+      if (startedAt) {
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < MIN_RECORDING_MS) {
+          const waitMs = MIN_RECORDING_MS - elapsed;
+          console.log(`[AudioRecorder] Waiting ${waitMs}ms to avoid empty audio`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+      }
+
       const statusBeforeStop = await activeRecording.getStatusAsync();
       console.log("[AudioRecorder] Status before stop:", statusBeforeStop);
 
-      await activeRecording.stopAndUnloadAsync();
+      try {
+        await activeRecording.stopAndUnloadAsync();
+      } catch (stopError) {
+        console.error("[AudioRecorder] First stop attempt failed:", stopError);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await activeRecording.stopAndUnloadAsync();
+      }
       console.log("[AudioRecorder] stopAndUnloadAsync completed");
 
       const statusAfterStop = await activeRecording.getStatusAsync();
       console.log("[AudioRecorder] Status after stop:", statusAfterStop);
 
       // IMPORTANT: read URI before clearing recording references.
-      const uri = activeRecording.getURI();
+      const uri = activeRecording.getURI() ?? ("uri" in statusAfterStop ? statusAfterStop.uri ?? null : null);
       console.log("[AudioRecorder] URI from recording:", uri);
 
       recordingRef.current = null;
+      recordingStartedAtRef.current = null;
       setRecording(null);
       setAudioUri(uri ?? null);
 
       return uri ?? null;
     } catch (error) {
       console.error("[AudioRecorder] Failed to stop recording.", error);
+      if (activeRecording) {
+        const fallbackUri = activeRecording.getURI();
+        console.log("[AudioRecorder] Fallback URI after stop failure:", fallbackUri);
+        if (fallbackUri) {
+          recordingRef.current = null;
+          setRecording(null);
+          setAudioUri(fallbackUri);
+          return fallbackUri;
+        }
+      }
       return null;
     } finally {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
       }).catch(() => undefined);
+      recordingStartedAtRef.current = null;
       isStoppingRef.current = false;
       startPromiseRef.current = null;
     }

@@ -108,19 +108,28 @@ export default function VoiceInputScreen() {
   };
 
   const handleStop = async () => {
+    console.log("[VoiceInput] handleStop called");
     setIsRecording(false);
+    setIsProcessing(true);
 
-    const uri = await stopRecording();
+    let uri: string | null = null;
+    try {
+      uri = await stopRecording();
+    } catch (error) {
+      console.error("[VoiceInput] stopRecording threw:", error);
+    }
+
+    console.log("[VoiceInput] stopRecording returned URI:", uri);
 
     if (!uri) {
       console.log("No audio URI found");
+      setIsProcessing(false);
       return;
     }
 
     console.log("Recording complete:", uri);
 
     try {
-      setIsProcessing(true);
       await sendToSpeechAPI(uri);
     } catch (error) {
       console.error("Processing error:", error);
