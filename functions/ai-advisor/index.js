@@ -6,8 +6,9 @@ console.log("Function started");
 const AI_ADVISOR_FALLBACK =
   "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
 const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
+const GEMINI_MODEL = "gemini-3-flash-preview";
 const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const DEFAULT_DISPLAY_CURRENCY = "INR";
 const DEFAULT_EXTRACTED_EXPENSE = JSON.stringify({
   category: "Others",

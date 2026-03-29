@@ -25,12 +25,7 @@ interface ChatMessage {
 }
 
 const AI_NAME = "FinBot";
-const ADVISOR_ICON_OPTIONS = [
-  "robot-outline",
-  "brain",
-  "chart-line",
-  "wallet-outline",
-] as const;
+const ADVISOR_ICON = "brain";
 
 export default function AdvisorScreen() {
   const { isDarkMode, currency } = useContext(ExpenseContext);
@@ -44,8 +39,6 @@ export default function AdvisorScreen() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [selectedAdvisorIcon, setSelectedAdvisorIcon] =
-    useState<(typeof ADVISOR_ICON_OPTIONS)[number]>("chart-line");
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
   const isMountedRef = useRef(true);
 
@@ -239,7 +232,7 @@ export default function AdvisorScreen() {
               }}
             >
               <MaterialCommunityIcons
-                name={selectedAdvisorIcon}
+                name={ADVISOR_ICON}
                 size={24}
                 color="#3b82f6"
               />
@@ -252,46 +245,6 @@ export default function AdvisorScreen() {
               <Text className="text-sm" style={{ color: colors.secondary }}>
                 AI Financial Advisor
               </Text>
-            </View>
-          </View>
-
-          <View
-            className="border-b px-4 py-3"
-            style={{ borderColor: colors.border, backgroundColor: colors.card }}
-          >
-            <Text className="text-xs font-semibold uppercase" style={{ color: colors.secondary }}>
-              Icon Preview
-            </Text>
-            <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>
-              Tap an option to preview the advisor logo before finalizing it.
-            </Text>
-
-            <View className="mt-3 flex-row flex-wrap gap-2">
-              {ADVISOR_ICON_OPTIONS.map((iconName) => {
-                const isSelected = iconName === selectedAdvisorIcon;
-
-                return (
-                  <Pressable
-                    key={iconName}
-                    onPress={() => setSelectedAdvisorIcon(iconName)}
-                    className="rounded-full border px-3 py-2"
-                    style={{
-                      backgroundColor: isSelected
-                        ? isDarkMode
-                          ? "#172554"
-                          : "#dbeafe"
-                        : colors.screen,
-                      borderColor: isSelected ? "#3b82f6" : colors.border,
-                    }}
-                  >
-                    <MaterialCommunityIcons
-                      name={iconName}
-                      size={28}
-                      color="#3b82f6"
-                    />
-                  </Pressable>
-                );
-              })}
             </View>
           </View>
 

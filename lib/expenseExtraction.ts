@@ -3,8 +3,8 @@ import { requestExpenseExtractionReply as requestExpenseExtractionReplyFromAppwr
 import { getCategories } from "./categoryService";
 
 export const OTHER_CATEGORY_NAME = "Other";
-const GEMINI_MODEL = "gemini-2.0-flash";
-const GEMINI_GENERATE_CONTENT_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_MODEL = "gemini-3-flash-preview";
+const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const EXTRACTION_FALLBACK = {
   category: OTHER_CATEGORY_NAME,

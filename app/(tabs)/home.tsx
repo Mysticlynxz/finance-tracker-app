@@ -313,7 +313,7 @@ export default function Home() {
           accessibilityLabel="Open AI Financial Advisor"
         >
           <MaterialCommunityIcons
-            name="chart-line-variant"
+            name="brain"
             size={22}
             color="#3b82f6"
           />
