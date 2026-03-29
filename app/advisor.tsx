@@ -10,7 +10,6 @@ import {
   Pressable,
   Text,
   TextInput,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,6 +24,14 @@ interface ChatMessage {
   text: string;
 }
 
+const AI_NAME = "FinBot";
+const ADVISOR_ICON_OPTIONS = [
+  "robot-outline",
+  "brain",
+  "chart-line",
+  "wallet-outline",
+] as const;
+
 export default function AdvisorScreen() {
   const { isDarkMode, currency } = useContext(ExpenseContext);
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -37,6 +44,8 @@ export default function AdvisorScreen() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [selectedAdvisorIcon, setSelectedAdvisorIcon] =
+    useState<(typeof ADVISOR_ICON_OPTIONS)[number]>("chart-line");
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
   const isMountedRef = useRef(true);
 
@@ -205,10 +214,8 @@ export default function AdvisorScreen() {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={80}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-          <View style={{ flex: 1 }}>
+        <View style={{ flex: 1 }}>
           <View
             className="flex-row items-center gap-3 border-b px-4 pb-3 pt-2"
             style={{ borderColor: colors.border }}
@@ -232,7 +239,7 @@ export default function AdvisorScreen() {
               }}
             >
               <MaterialCommunityIcons
-                name="chart-line-variant"
+                name={selectedAdvisorIcon}
                 size={24}
                 color="#3b82f6"
               />
@@ -240,11 +247,51 @@ export default function AdvisorScreen() {
 
             <View>
               <Text className="text-lg font-bold" style={{ color: colors.primary }}>
-                AI Financial Advisor
+                {AI_NAME}
               </Text>
               <Text className="text-sm" style={{ color: colors.secondary }}>
-                Personalized spending guidance
+                AI Financial Advisor
               </Text>
+            </View>
+          </View>
+
+          <View
+            className="border-b px-4 py-3"
+            style={{ borderColor: colors.border, backgroundColor: colors.card }}
+          >
+            <Text className="text-xs font-semibold uppercase" style={{ color: colors.secondary }}>
+              Icon Preview
+            </Text>
+            <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>
+              Tap an option to preview the advisor logo before finalizing it.
+            </Text>
+
+            <View className="mt-3 flex-row flex-wrap gap-2">
+              {ADVISOR_ICON_OPTIONS.map((iconName) => {
+                const isSelected = iconName === selectedAdvisorIcon;
+
+                return (
+                  <Pressable
+                    key={iconName}
+                    onPress={() => setSelectedAdvisorIcon(iconName)}
+                    className="rounded-full border px-3 py-2"
+                    style={{
+                      backgroundColor: isSelected
+                        ? isDarkMode
+                          ? "#172554"
+                          : "#dbeafe"
+                        : colors.screen,
+                      borderColor: isSelected ? "#3b82f6" : colors.border,
+                    }}
+                  >
+                    <MaterialCommunityIcons
+                      name={iconName}
+                      size={28}
+                      color="#3b82f6"
+                    />
+                  </Pressable>
+                );
+              })}
             </View>
           </View>
 
@@ -258,7 +305,7 @@ export default function AdvisorScreen() {
               contentContainerStyle={{
                 paddingHorizontal: 12,
                 paddingTop: 16,
-                paddingBottom: 140,
+                paddingBottom: 24,
               }}
               onContentSizeChange={() => {
                 setTimeout(() => {
@@ -287,6 +334,8 @@ export default function AdvisorScreen() {
                         borderRadius: 12,
                         marginVertical: 4,
                         maxWidth: isUser ? "75%" : "80%",
+                        minWidth: 0,
+                        flexShrink: 1,
                         alignSelf: isUser ? "flex-end" : "flex-start",
                       }}
                     >
@@ -360,8 +409,7 @@ export default function AdvisorScreen() {
               </Pressable>
             </View>
           </View>
-          </View>
-        </TouchableWithoutFeedback>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
