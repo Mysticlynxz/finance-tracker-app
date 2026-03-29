@@ -370,7 +370,7 @@ export default function Budget() {
       </View>
 
       <View className="mt-6 gap-3">
-        {isEditing && (
+        {(isEditing || numericBudget === 0) && (
           <Pressable
             onPress={handleSave}
             className="items-center rounded-xl bg-violet-600 py-4"
