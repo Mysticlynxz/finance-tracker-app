@@ -7,7 +7,9 @@ import {
   Functions,
   ID,
   Models,
+  Permission,
   Query,
+  Role,
 } from "appwrite";
 import { normalizeCurrencyCode } from "../constants/currency";
 
@@ -103,6 +105,12 @@ const parseNumericAmount = (value: unknown, fieldName: string) => {
 
   return numericValue;
 };
+
+const buildUserDocumentPermissions = (userId: string) => [
+  Permission.read(Role.user(userId)),
+  Permission.update(Role.user(userId)),
+  Permission.delete(Role.user(userId)),
+];
 
 const deleteUserDocuments = async (collectionId: string): Promise<number> => {
   const user = await getCurrentUser();
@@ -212,6 +220,7 @@ export const createExpense = async (
         date: input.date,
         userId: user.$id,
       },
+      permissions: buildUserDocumentPermissions(user.$id),
     });
   } catch (error) {
     const message = getErrorMessage(error);
@@ -278,6 +287,7 @@ export const setBudget = async (
           amount: normalizedAmount,
           userId: user.$id,
         },
+        permissions: buildUserDocumentPermissions(user.$id),
       });
     }
 
@@ -289,6 +299,7 @@ export const setBudget = async (
         amount: normalizedAmount,
         userId: user.$id,
       },
+      permissions: buildUserDocumentPermissions(user.$id),
     });
   } catch (error) {
     const message = getErrorMessage(error);

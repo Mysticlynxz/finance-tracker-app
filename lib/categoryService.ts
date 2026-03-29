@@ -1,4 +1,4 @@
-import { ID, Models, Query } from "appwrite";
+import { ID, Models, Permission, Query, Role } from "appwrite";
 import { APPWRITE_DATABASE_ID, databases, getCurrentUser, getErrorMessage } from "./appwrite";
 
 const APPWRITE_CATEGORIES_COLLECTION_ID = "categories";
@@ -13,6 +13,12 @@ const buildCategoryIcon = (name: string) => {
   const trimmedName = name.trim();
   return trimmedName.charAt(0).toUpperCase();
 };
+
+const buildUserDocumentPermissions = (userId: string) => [
+  Permission.read(Role.user(userId)),
+  Permission.update(Role.user(userId)),
+  Permission.delete(Role.user(userId)),
+];
 
 export const createCategory = async (name: string): Promise<CategoryDocument> => {
   const trimmedName = name.trim();
@@ -33,6 +39,7 @@ export const createCategory = async (name: string): Promise<CategoryDocument> =>
         icon: buildCategoryIcon(trimmedName),
         userId: user.$id,
       },
+      permissions: buildUserDocumentPermissions(user.$id),
     });
   } catch (error) {
     const message = getErrorMessage(error);
