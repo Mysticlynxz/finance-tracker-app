@@ -6,9 +6,10 @@ console.log("Function started");
 const AI_ADVISOR_FALLBACK =
   "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
 const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
-const GEMINI_MODEL = "gemini-3-flash-preview";
-const GEMINI_ENDPOINT =
-  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const ADVISOR_GEMINI_MODEL = "gemini-3-flash-preview";
+const EXPENSE_EXTRACTION_GEMINI_MODEL = "gemini-2.5-pro";
+const buildGeminiEndpoint = (model) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const DEFAULT_DISPLAY_CURRENCY = "INR";
 const DEFAULT_EXTRACTED_EXPENSE = JSON.stringify({
   category: "Others",
@@ -232,8 +233,8 @@ const extractReplyText = (data) => {
   return typeof reply === "string" ? reply.trim() : "";
 };
 
-const callGemini = async ({ apiKey, prompt, systemPrompt }) => {
-  const response = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+const callGemini = async ({ apiKey, model = ADVISOR_GEMINI_MODEL, prompt, systemPrompt }) => {
+  const response = await fetch(`${buildGeminiEndpoint(model)}?key=${encodeURIComponent(apiKey)}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -296,6 +297,7 @@ Rules:
 
   const data = await callGemini({
     apiKey,
+    model: EXPENSE_EXTRACTION_GEMINI_MODEL,
     prompt: extractionPrompt,
   });
 
