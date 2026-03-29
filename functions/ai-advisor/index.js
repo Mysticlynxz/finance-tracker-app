@@ -7,7 +7,7 @@ const AI_ADVISOR_FALLBACK =
   "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
 const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
 const ADVISOR_GEMINI_MODEL = "gemini-3-flash-preview";
-const EXPENSE_EXTRACTION_GEMINI_MODEL = "gemini-2.5-pro";
+const EXPENSE_EXTRACTION_GEMINI_MODEL = "gemini-3-flash-preview";
 const buildGeminiEndpoint = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const DEFAULT_DISPLAY_CURRENCY = "INR";
