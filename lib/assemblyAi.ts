@@ -17,10 +17,24 @@ interface AssemblyAITranscriptResponse {
 }
 
 const getAssemblyAIApiKey = () => {
-  const apiKey = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY?.trim();
+  const raw = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY;
+
+  if (__DEV__) {
+    console.log("API KEY:", raw);
+  } else {
+    console.log(
+      "AssemblyAI EXPO_PUBLIC_ASSEMBLYAI_API_KEY present:",
+      Boolean(raw?.trim())
+    );
+  }
+
+  const apiKey = raw?.trim();
 
   if (!apiKey) {
-    throw new Error("Missing EXPO_PUBLIC_ASSEMBLYAI_API_KEY.");
+    throw new Error(
+      "Missing EXPO_PUBLIC_ASSEMBLYAI_API_KEY. Local: add it to `.env` and restart with `npx expo start -c`. " +
+        "APK / EAS: set this variable for your build profile in the Expo dashboard (Environment variables) or via `eas env` — your `.env` file is not uploaded when gitignored."
+    );
   }
 
   return apiKey;
