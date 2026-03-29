@@ -5,6 +5,7 @@ import { Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
 import { transcribeAudioUriWithAssemblyAI } from "../lib/assemblyAi";
+import { extractExpenseFromUserText } from "../lib/expenseExtraction";
 import { useAudioRecorder } from "../lib/useAudioRecorder";
 
 export default function VoiceInputScreen() {
@@ -13,7 +14,11 @@ export default function VoiceInputScreen() {
 
   const sendToSpeechAPI = async (uri: string) => {
     console.log("ENTERED API FUNCTION");
-    await transcribeAudioUriWithAssemblyAI(uri);
+    const transcribedText = await transcribeAudioUriWithAssemblyAI(uri);
+
+    console.log("Transcribed text:", transcribedText);
+
+    await extractExpenseFromUserText(transcribedText);
   };
 
   const handleRecordingPress = async () => {
@@ -26,7 +31,11 @@ export default function VoiceInputScreen() {
 
     if (uri) {
       console.log("Calling Speech API...");
-      await sendToSpeechAPI(uri);
+      try {
+        await sendToSpeechAPI(uri);
+      } catch (error) {
+        console.error("[Voice Input] Expense extraction failed:", error);
+      }
     } else {
       console.log("No audio URI found");
     }

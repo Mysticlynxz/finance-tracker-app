@@ -1,20 +1,135 @@
 import { DEFAULT_CATEGORY_NAMES } from "../constants/categories";
-import { requestExpenseExtractionReply } from "./appwrite";
+import { requestExpenseExtractionReply as requestExpenseExtractionReplyFromAppwrite } from "./appwrite";
 import { getCategories } from "./categoryService";
 
 export const OTHER_CATEGORY_NAME = "Other";
+const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_GENERATE_CONTENT_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 const EXTRACTION_FALLBACK = {
   category: OTHER_CATEGORY_NAME,
   amount: 0,
 } as const;
 
-const sanitizeJsonReply = (reply: string) =>
-  reply
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
+interface GeminiContentPart {
+  text?: string;
+}
+
+interface GeminiCandidate {
+  content?: {
+    parts?: GeminiContentPart[];
+  };
+}
+
+interface GeminiGenerateContentResponse {
+  candidates?: GeminiCandidate[];
+  error?: {
+    message?: string;
+  };
+}
+
+const getGeminiApiKey = () =>
+  process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim() || "";
+
+const buildGeminiExpensePrompt = (transcribedText: string) => `Extract expense details from this sentence:
+
+"${transcribedText}"
+
+Return ONLY valid JSON:
+{
+  "category": "string",
+  "amount": number
+}
+
+Rules:
+- Category should be a single word (Food, Travel, etc.)
+- Amount must be a number
+- If missing -> amount = 0
+- If unclear -> category = "Other"
+- No explanation, only JSON`;
+
+const parseGeminiResponse = async (
+  response: Response
+): Promise<GeminiGenerateContentResponse> => {
+  const responseText = await response.text();
+
+  if (!responseText.trim()) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(responseText) as GeminiGenerateContentResponse;
+  } catch {
+    throw new Error(
+      responseText.trim() || `Gemini returned an invalid response with status ${response.status}.`
+    );
+  }
+};
+
+const extractReplyTextFromGemini = (data: GeminiGenerateContentResponse) =>
+  data.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text?.trim() || "")
+    .join("")
+    .trim() || "";
+
+const requestGeminiExpenseExtractionReply = async (
+  transcribedText: string
+): Promise<string> => {
+  const apiKey = getGeminiApiKey();
+
+  if (!apiKey) {
+    throw new Error("Missing EXPO_PUBLIC_GEMINI_API_KEY.");
+  }
+
+  const response = await fetch(`${GEMINI_GENERATE_CONTENT_URL}?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: buildGeminiExpensePrompt(transcribedText),
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        response_mime_type: "application/json",
+        response_schema: {
+          type: "OBJECT",
+          properties: {
+            category: {
+              type: "STRING",
+            },
+            amount: {
+              type: "NUMBER",
+            },
+          },
+          required: ["category", "amount"],
+        },
+      },
+    }),
+  });
+
+  const data = await parseGeminiResponse(response);
+
+  if (!response.ok) {
+    throw new Error(
+      data.error?.message?.trim() || response.statusText || "Gemini expense extraction failed."
+    );
+  }
+
+  const reply = extractReplyTextFromGemini(data);
+
+  if (!reply) {
+    throw new Error("Gemini returned an empty reply.");
+  }
+
+  return reply;
+};
 
 const canonicalizeCategoryName = (category: string) => {
   const trimmedCategory = category.trim();
@@ -88,7 +203,7 @@ export interface ExpenseExtractionResult {
   category: string;
   rawCategory: string;
   reply: string;
-  parsed: Record<string, unknown> | null;
+  parsed: Record<string, unknown>;
   validCategories: string[];
 }
 
@@ -105,36 +220,10 @@ export const extractExpenseFromUserText = async (
   console.log("User text:", trimmedUserText);
 
   if (!trimmedUserText) {
-    console.log("AI reply:", "");
-    console.log("Parsed:", null);
-    console.log("Final:", {
-      matchedCategory: EXTRACTION_FALLBACK.category,
-      amount: EXTRACTION_FALLBACK.amount,
-    });
+    const reply = JSON.stringify(EXTRACTION_FALLBACK);
+    const parsed = { ...EXTRACTION_FALLBACK };
 
-    return {
-      amount: EXTRACTION_FALLBACK.amount,
-      category: EXTRACTION_FALLBACK.category,
-      rawCategory: EXTRACTION_FALLBACK.category,
-      reply: "",
-      parsed: null,
-      validCategories,
-    };
-  }
-
-  const reply = await requestExpenseExtractionReply({
-    message: trimmedUserText,
-    validCategories,
-  });
-
-  console.log("AI reply:", reply);
-
-  let parsed: Record<string, unknown> | null = null;
-
-  try {
-    parsed = JSON.parse(sanitizeJsonReply(reply)) as Record<string, unknown>;
-  } catch (error) {
-    console.error("JSON parse error:", error);
+    console.log("Gemini raw:", reply);
     console.log("Parsed:", parsed);
     console.log("Final:", {
       matchedCategory: EXTRACTION_FALLBACK.category,
@@ -146,9 +235,32 @@ export const extractExpenseFromUserText = async (
       category: EXTRACTION_FALLBACK.category,
       rawCategory: EXTRACTION_FALLBACK.category,
       reply,
-      parsed: null,
+      parsed,
       validCategories,
     };
+  }
+
+  let reply = JSON.stringify(EXTRACTION_FALLBACK);
+  try {
+    reply = await requestGeminiExpenseExtractionReply(trimmedUserText);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Gemini expense extraction failed.";
+    console.error("[Expense Extraction] Gemini request failed:", errorMessage);
+
+    reply = await requestExpenseExtractionReplyFromAppwrite({
+      message: trimmedUserText,
+      validCategories,
+    });
+  }
+
+  console.log("Gemini raw:", reply);
+
+  let parsed: Record<string, unknown>;
+
+  try {
+    parsed = JSON.parse(reply) as Record<string, unknown>;
+  } catch {
+    parsed = { ...EXTRACTION_FALLBACK };
   }
 
   console.log("Parsed:", parsed);
