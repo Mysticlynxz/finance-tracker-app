@@ -34,7 +34,9 @@ export default function AdvisorScreen() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const flatListRef = useRef<FlatList<ChatMessage>>(null);
+  const isMountedRef = useRef(true);
 
   const colors = useMemo(
     () =>
@@ -67,15 +69,101 @@ export default function AdvisorScreen() {
   };
 
   useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const frame = requestAnimationFrame(() => {
       scrollToBottom();
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [messages, isLoading]);
+  }, [messages, isLoading, isStreaming]);
+
+  const wait = (ms: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
+
+  const streamText = async (fullText: string) => {
+    const words = fullText.trim().split(/\s+/).filter(Boolean);
+
+    if (words.length === 0) {
+      setMessages((current) => {
+        if (current.length === 0) {
+          return current;
+        }
+
+        const updated = [...current];
+        const lastIndex = updated.length - 1;
+
+        if (updated[lastIndex].role !== "assistant") {
+          return current;
+        }
+
+        updated[lastIndex] = {
+          ...updated[lastIndex],
+          text: "",
+        };
+
+        return updated;
+      });
+
+      return;
+    }
+
+    let currentText = "";
+
+    for (let index = 0; index < words.length; index += 1) {
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      currentText += `${words[index]} `;
+
+      setMessages((current) => {
+        if (current.length === 0) {
+          return current;
+        }
+
+        const updated = [...current];
+        const lastIndex = updated.length - 1;
+
+        if (updated[lastIndex].role !== "assistant") {
+          return current;
+        }
+
+        updated[lastIndex] = {
+          ...updated[lastIndex],
+          text: currentText.trim(),
+        };
+
+        return updated;
+      });
+
+      await wait(40);
+    }
+  };
+
+  const streamAssistantReply = async (fullText: string) => {
+    const safeText = fullText.trim() || AI_ADVISOR_FALLBACK_RESPONSE;
+
+    setMessages((current) => [...current, { role: "assistant", text: "" }]);
+    setIsStreaming(true);
+
+    try {
+      await streamText(safeText);
+    } finally {
+      if (isMountedRef.current) {
+        setIsStreaming(false);
+      }
+    }
+  };
 
   const handleSend = async () => {
-    if (isLoading) {
+    if (isLoading || isStreaming) {
       return;
     }
 
@@ -92,161 +180,162 @@ export default function AdvisorScreen() {
 
     try {
       const reply = await askFinancialAdvisor(trimmedMessage, currency);
-      setMessages((current) => [...current, { role: "assistant", text: reply }]);
-    } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          text:
-            error instanceof Error && error.message.trim()
-              ? error.message
-              : AI_ADVISOR_FALLBACK_RESPONSE,
-        },
-      ]);
-    } finally {
       setIsLoading(false);
+      await streamAssistantReply(reply);
+    } catch (error) {
+      setIsLoading(false);
+      await streamAssistantReply(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : AI_ADVISOR_FALLBACK_RESPONSE
+      );
+    } finally {
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
-  const canSend = Boolean(input.trim()) && !isLoading;
+  const canSend = Boolean(input.trim()) && !isLoading && !isStreaming;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.screen }}>
       <View style={{ flex: 1 }}>
         <KeyboardAvoidingView className="flex-1" behavior="padding">
-        <View
-          className="flex-row items-center gap-3 border-b px-4 pb-3 pt-2"
-          style={{ borderColor: colors.border }}
-        >
-          <Pressable
-            onPress={() => router.back()}
-            className="h-10 w-10 items-center justify-center rounded-full"
-            style={{ backgroundColor: colors.card }}
-            accessibilityRole="button"
-            accessibilityLabel="Go back"
+          <View
+            className="flex-row items-center gap-3 border-b px-4 pb-3 pt-2"
+            style={{ borderColor: colors.border }}
           >
-            <Ionicons name="chevron-back" size={20} color={colors.primary} />
-          </Pressable>
-
-          <View>
-            <Text className="text-lg font-bold" style={{ color: colors.primary }}>
-              AI Financial Advisor
-            </Text>
-            <Text className="text-sm" style={{ color: colors.secondary }}>
-              Personalized spending guidance
-            </Text>
-          </View>
-        </View>
-
-        <View style={{ flex: 1 }}>
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            keyExtractor={(_, index) => index.toString()}
-            className="flex-1"
-            style={{ flex: 1 }}
-            contentContainerStyle={{
-              paddingHorizontal: 12,
-              paddingTop: 16,
-              paddingBottom: 140,
-            }}
-            onContentSizeChange={() => {
-              setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: true });
-              }, 100);
-            }}
-            onLayout={() => scrollToBottom(false)}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            removeClippedSubviews={false}
-            renderItem={({ item: message }) => {
-              const isUser = message.role === "user";
-
-              return (
-                <View
-                  style={{
-                    width: "100%",
-                    alignItems: isUser ? "flex-end" : "flex-start",
-                  }}
-                >
-                  <View
-                    style={{
-                      backgroundColor: isUser ? "#3b82f6" : "#e5e7eb",
-                      padding: 12,
-                      borderRadius: 12,
-                      marginVertical: 4,
-                      maxWidth: "85%",
-                      minWidth: 0,
-                      flexShrink: 1,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: isUser ? "white" : "black",
-                        flexWrap: "wrap",
-                        flexShrink: 1,
-                        lineHeight: 20,
-                      }}
-                    >
-                      {message.text}
-                    </Text>
-                  </View>
-                </View>
-              );
-            }}
-            ListFooterComponent={
-              isLoading ? (
-                <View
-                  style={{
-                    width: "100%",
-                    alignItems: "flex-start",
-                  }}
-                >
-                  <View style={{ padding: 10 }}>
-                    <ActivityIndicator size="small" color="#888" />
-                  </View>
-                </View>
-              ) : null
-            }
-          />
-        </View>
-
-        <View
-          className="border-t"
-          style={{ borderColor: colors.border, backgroundColor: colors.screen }}
-        >
-          <View style={{ padding: 12 }}>
-            <View
-              className="flex-row items-end rounded-2xl border px-3 py-2"
-              style={{ borderColor: colors.border, backgroundColor: colors.card }}
+            <Pressable
+              onPress={() => router.back()}
+              className="h-10 w-10 items-center justify-center rounded-full"
+              style={{ backgroundColor: colors.card }}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
             >
-              <TextInput
-                value={input}
-                onChangeText={setInput}
-                placeholder="Ask about your spending..."
-                placeholderTextColor={colors.secondary}
-                multiline
-                maxLength={1000}
-                className="max-h-32 flex-1 py-2 text-base"
-                style={{ color: colors.primary }}
-              />
+              <Ionicons name="chevron-back" size={20} color={colors.primary} />
+            </Pressable>
 
-              <Pressable
-                onPress={() => void handleSend()}
-                disabled={!canSend}
-                className="ml-2 h-10 w-10 items-center justify-center rounded-full"
-                style={{
-                  backgroundColor: canSend ? colors.userBubble : colors.disabledButton,
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Send message"
-              >
-                <Ionicons name="send" size={18} color="#ffffff" />
-              </Pressable>
+            <View>
+              <Text className="text-lg font-bold" style={{ color: colors.primary }}>
+                AI Financial Advisor
+              </Text>
+              <Text className="text-sm" style={{ color: colors.secondary }}>
+                Personalized spending guidance
+              </Text>
             </View>
           </View>
-        </View>
+
+          <View style={{ flex: 1 }}>
+            <FlatList
+              ref={flatListRef}
+              data={messages}
+              keyExtractor={(_, index) => index.toString()}
+              className="flex-1"
+              style={{ flex: 1 }}
+              contentContainerStyle={{
+                paddingHorizontal: 12,
+                paddingTop: 16,
+                paddingBottom: 140,
+              }}
+              onContentSizeChange={() => {
+                setTimeout(() => {
+                  flatListRef.current?.scrollToEnd({ animated: true });
+                }, 100);
+              }}
+              onLayout={() => scrollToBottom(false)}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              removeClippedSubviews={false}
+              renderItem={({ item: message }) => {
+                const isUser = message.role === "user";
+
+                return (
+                  <View
+                    style={{
+                      width: "100%",
+                      alignItems: isUser ? "flex-end" : "flex-start",
+                    }}
+                  >
+                    <View
+                      style={{
+                        backgroundColor: isUser ? "#3b82f6" : "#e5e7eb",
+                        padding: 12,
+                        borderRadius: 12,
+                        marginVertical: 4,
+                        maxWidth: isUser ? "72%" : "85%",
+                        minWidth: 0,
+                        ...(isUser ? {} : { flexShrink: 1 }),
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: isUser ? "white" : "black",
+                          flexWrap: "wrap",
+                          lineHeight: 20,
+                          ...(isUser ? {} : { flexShrink: 1 }),
+                        }}
+                      >
+                        {message.text}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              }}
+              ListFooterComponent={
+                isLoading ? (
+                  <View
+                    style={{
+                      width: "100%",
+                      alignItems: "flex-start",
+                    }}
+                  >
+                    <View style={{ padding: 10 }}>
+                      <ActivityIndicator size="small" color="#888" />
+                    </View>
+                  </View>
+                ) : null
+              }
+            />
+          </View>
+
+          <View
+            className="border-t"
+            style={{ borderColor: colors.border, backgroundColor: colors.screen }}
+          >
+            <View style={{ padding: 12 }}>
+              <View
+                className="flex-row items-end rounded-2xl border px-3 py-2"
+                style={{ borderColor: colors.border, backgroundColor: colors.card }}
+              >
+                <TextInput
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder="Ask about your spending..."
+                  placeholderTextColor={colors.secondary}
+                  multiline
+                  maxLength={1000}
+                  className="max-h-32 flex-1 py-2 text-base"
+                  style={{ color: colors.primary }}
+                />
+
+                <Pressable
+                  onPress={() => {
+                    void handleSend();
+                  }}
+                  disabled={!canSend}
+                  className="ml-2 h-10 w-10 items-center justify-center rounded-full"
+                  style={{
+                    backgroundColor: canSend ? colors.userBubble : colors.disabledButton,
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Send message"
+                >
+                  <Ionicons name="send" size={18} color="#ffffff" />
+                </Pressable>
+              </View>
+            </View>
+          </View>
         </KeyboardAvoidingView>
       </View>
     </SafeAreaView>

@@ -1,7 +1,8 @@
+import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useContext, useState } from "react";
-import { Alert, Modal, Pressable, Text, View } from "react-native";
+import { useContext, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Animated, Modal, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
 import { createExpense } from "../lib/appwrite";
@@ -16,9 +17,27 @@ interface DetectedExpense {
 
 export default function VoiceInputScreen() {
   const { isDarkMode } = useContext(ExpenseContext);
-  const { recording, audioUri, startRecording, stopRecording } = useAudioRecorder();
+  const { recording, startRecording, stopRecording } = useAudioRecorder();
   const [detectedExpense, setDetectedExpense] = useState<DetectedExpense | null>(null);
   const [isSavingExpense, setIsSavingExpense] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const micScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.spring(micScale, {
+      toValue: isRecording ? 1.08 : 1,
+      friction: 6,
+      tension: 120,
+      useNativeDriver: true,
+    }).start();
+  }, [isRecording, micScale]);
+
+  useEffect(() => {
+    if (!recording) {
+      setIsRecording(false);
+    }
+  }, [recording]);
 
   const sendToSpeechAPI = async (uri: string) => {
     console.log("ENTERED API FUNCTION");
@@ -75,24 +94,36 @@ export default function VoiceInputScreen() {
     setDetectedExpense(null);
   };
 
-  const handleRecordingPress = async () => {
-    if (!recording) {
-      await startRecording();
-      return;
-    }
+  const handleStop = async () => {
+    setIsRecording(false);
 
     const uri = await stopRecording();
 
-    if (uri) {
-      console.log("Calling Speech API...");
-      try {
-        await sendToSpeechAPI(uri);
-      } catch (error) {
-        console.error("[Voice Input] Expense extraction failed:", error);
-      }
-    } else {
+    if (!uri) {
       console.log("No audio URI found");
+      return;
     }
+
+    console.log("Recording complete:", uri);
+
+    try {
+      setIsProcessing(true);
+      await sendToSpeechAPI(uri);
+    } catch (error) {
+      console.error("Processing error:", error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handlePressIn = async () => {
+    if (isProcessing || isSavingExpense) {
+      return;
+    }
+
+    setIsRecording(true);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    await startRecording();
   };
 
   const colors = isDarkMode
@@ -128,7 +159,7 @@ export default function VoiceInputScreen() {
               Voice input
             </Text>
             <Text className="mt-1 text-sm" style={{ color: colors.secondary }}>
-              Record audio and capture the saved file URI.
+              Press and hold the microphone to record. Release to process your expense.
             </Text>
           </View>
 
@@ -147,54 +178,65 @@ export default function VoiceInputScreen() {
         >
           <View
             className="mb-5 h-20 w-20 items-center justify-center rounded-full"
-            style={{ backgroundColor: recording ? "#fee2e2" : isDarkMode ? "#052e2b" : "#d1fae5" }}
+            style={{ backgroundColor: isRecording ? "#fee2e2" : isDarkMode ? "#052e2b" : "#d1fae5" }}
           >
             <Ionicons
-              name={recording ? "radio-button-on" : "mic"}
+              name={isRecording ? "radio-button-on" : "mic"}
               size={30}
-              color={recording ? "#dc2626" : colors.accent}
+              color={isRecording ? "#dc2626" : colors.accent}
             />
           </View>
 
           <Text className="text-center text-2xl font-bold" style={{ color: colors.primary }}>
-            {recording ? "Recording in progress" : "Ready to record"}
+            {isProcessing
+              ? "Processing your expense"
+              : isRecording
+                ? "Recording in progress"
+                : "Ready to record"}
           </Text>
           <Text
             className="mt-3 text-center text-base"
             style={{ color: colors.secondary, lineHeight: 24 }}
           >
-            {recording
-              ? "Tap stop to finish recording and save the audio file."
-              : "Tap start to request microphone access and begin recording."}
+            {isProcessing
+              ? "Speech-to-text and expense extraction are in progress."
+              : isRecording
+                ? "Release the microphone to stop recording and process your expense."
+                : "Press and hold the microphone button to start recording."}
           </Text>
 
-          <Pressable
-            onPress={() => {
-              void handleRecordingPress();
+          <Animated.View
+            className="mt-8"
+            style={{
+              transform: [{ scale: micScale }],
             }}
-            className="mt-8 min-w-[220px] items-center rounded-2xl px-6 py-4"
-            style={{ backgroundColor: recording ? "#dc2626" : colors.accent }}
           >
-            <Text className="text-base font-semibold text-white">
-              {recording ? "Stop recording" : "Start recording"}
-            </Text>
-          </Pressable>
-
-          <View
-            className="mt-5 w-full rounded-2xl border p-4"
-            style={{ borderColor: colors.border, backgroundColor: isDarkMode ? "#111827" : "#eff6ff" }}
-          >
-            <Text className="text-sm font-semibold" style={{ color: colors.primary }}>
-              Recorded file URI
-            </Text>
-            <Text
-              selectable
-              className="mt-2 text-sm"
-              style={{ color: audioUri ? colors.primary : colors.secondary, lineHeight: 22 }}
+            <Pressable
+              onPressIn={() => {
+                void handlePressIn();
+              }}
+              onPressOut={() => {
+                void handleStop();
+              }}
+              disabled={isProcessing || isSavingExpense}
+              className="items-center justify-center rounded-full"
+              style={{
+                width: 80,
+                height: 80,
+                borderRadius: 40,
+                backgroundColor: isRecording ? "red" : "#3b82f6",
+                opacity: isProcessing || isSavingExpense ? 0.6 : 1,
+              }}
             >
-              {audioUri ?? "No recording saved yet."}
+              <Text style={{ color: "white", fontSize: 28 }}>🎤</Text>
+            </Pressable>
+          </Animated.View>
+
+          {isRecording && (
+            <Text className="mt-3 text-base font-semibold" style={{ color: "#dc2626" }}>
+              Recording...
             </Text>
-          </View>
+          )}
 
           <Pressable
             onPress={() => router.replace("/home")}
@@ -207,6 +249,24 @@ export default function VoiceInputScreen() {
           </Pressable>
         </View>
       </View>
+
+      {isProcessing && (
+        <View
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0,0,0,0.4)",
+            justifyContent: "center",
+            alignItems: "center",
+            zIndex: 999,
+          }}
+        >
+          <ActivityIndicator size="large" color="#fff" />
+        </View>
+      )}
 
       <Modal
         visible={Boolean(detectedExpense)}
