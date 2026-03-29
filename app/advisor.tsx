@@ -3,11 +3,10 @@ import { router } from "expo-router";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  FlatList,
   Keyboard,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   View,
@@ -35,7 +34,7 @@ export default function AdvisorScreen() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const scrollViewRef = useRef<ScrollView>(null);
+  const flatListRef = useRef<FlatList<ChatMessage>>(null);
 
   const colors = useMemo(
     () =>
@@ -64,7 +63,7 @@ export default function AdvisorScreen() {
   );
 
   const scrollToBottom = (animated = true) => {
-    scrollViewRef.current?.scrollToEnd({ animated });
+    flatListRef.current?.scrollToEnd({ animated });
   };
 
   useEffect(() => {
@@ -113,11 +112,9 @@ export default function AdvisorScreen() {
   const canSend = Boolean(input.trim()) && !isLoading;
 
   return (
-    <SafeAreaView className="flex-1" style={{ backgroundColor: colors.screen }}>
-      <KeyboardAvoidingView
-        className="flex-1"
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.screen }}>
+      <View style={{ flex: 1 }}>
+        <KeyboardAvoidingView className="flex-1" behavior="padding">
         <View
           className="flex-row items-center gap-3 border-b px-4 pb-3 pt-2"
           style={{ borderColor: colors.border }}
@@ -142,122 +139,116 @@ export default function AdvisorScreen() {
           </View>
         </View>
 
-        <ScrollView
-          ref={scrollViewRef}
-          className="flex-1 px-4"
-          contentContainerStyle={{ flexGrow: 1, paddingBottom: 20, paddingTop: 16 }}
-          onContentSizeChange={() => scrollToBottom()}
-          onLayout={() => scrollToBottom(false)}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {messages.map((message, index) => {
-            const isUser = message.role === "user";
+        <View style={{ flex: 1 }}>
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(_, index) => index.toString()}
+            className="flex-1"
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingHorizontal: 12,
+              paddingTop: 16,
+              paddingBottom: 140,
+            }}
+            onContentSizeChange={() => {
+              setTimeout(() => {
+                flatListRef.current?.scrollToEnd({ animated: true });
+              }, 100);
+            }}
+            onLayout={() => scrollToBottom(false)}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            removeClippedSubviews={false}
+            renderItem={({ item: message }) => {
+              const isUser = message.role === "user";
 
-            return (
-              <View
-                key={`${message.role}-${index}`}
-                style={{
-                  flexDirection: "row",
-                  flexWrap: "wrap",
-                  justifyContent: isUser ? "flex-end" : "flex-start",
-                  width: "100%",
-                }}
-              >
+              return (
                 <View
                   style={{
-                    alignSelf: isUser ? "flex-end" : "flex-start",
-                    backgroundColor: isUser
-                      ? colors.userBubble
-                      : colors.assistantBubble,
-                    borderRadius: 12,
-                    flexShrink: 1,
-                    marginVertical: 5,
-                    maxWidth: "80%",
-                    padding: 12,
+                    width: "100%",
+                    alignItems: isUser ? "flex-end" : "flex-start",
                   }}
                 >
-                  <Text
-                    className="text-base"
+                  <View
                     style={{
-                      color: isUser ? "#ffffff" : colors.primary,
+                      backgroundColor: isUser ? "#3b82f6" : "#e5e7eb",
+                      padding: 12,
+                      borderRadius: 12,
+                      marginVertical: 4,
+                      maxWidth: "85%",
+                      minWidth: 0,
                       flexShrink: 1,
-                      flexWrap: "wrap",
-                      lineHeight: 20,
                     }}
                   >
-                    {message.text}
-                  </Text>
+                    <Text
+                      style={{
+                        color: isUser ? "white" : "black",
+                        flexWrap: "wrap",
+                        flexShrink: 1,
+                        lineHeight: 20,
+                      }}
+                    >
+                      {message.text}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            );
-          })}
-
-          {isLoading && (
-            <View
-              style={{
-                flexDirection: "row",
-                flexWrap: "wrap",
-                justifyContent: "flex-start",
-                width: "100%",
-              }}
-            >
-              <View
-                style={{
-                  alignSelf: "flex-start",
-                  backgroundColor: colors.assistantBubble,
-                  borderRadius: 12,
-                  flexShrink: 1,
-                  marginVertical: 5,
-                  maxWidth: "80%",
-                  padding: 12,
-                }}
-              >
-                <View className="flex-row items-center gap-2">
-                  <ActivityIndicator size="small" color={colors.secondary} />
-                  <Text className="text-sm" style={{ color: colors.secondary }}>
-                    AI is thinking...
-                  </Text>
+              );
+            }}
+            ListFooterComponent={
+              isLoading ? (
+                <View
+                  style={{
+                    width: "100%",
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <View style={{ padding: 10 }}>
+                    <ActivityIndicator size="small" color="#888" />
+                  </View>
                 </View>
-              </View>
-            </View>
-          )}
-        </ScrollView>
+              ) : null
+            }
+          />
+        </View>
 
         <View
-          className="border-t px-4 pb-4 pt-3"
+          className="border-t"
           style={{ borderColor: colors.border, backgroundColor: colors.screen }}
         >
-          <View
-            className="flex-row items-end rounded-2xl border px-3 py-2"
-            style={{ borderColor: colors.border, backgroundColor: colors.card }}
-          >
-            <TextInput
-              value={input}
-              onChangeText={setInput}
-              placeholder="Ask about your spending..."
-              placeholderTextColor={colors.secondary}
-              multiline
-              maxLength={1000}
-              className="max-h-32 flex-1 py-2 text-base"
-              style={{ color: colors.primary }}
-            />
-
-            <Pressable
-              onPress={() => void handleSend()}
-              disabled={!canSend}
-              className="ml-2 h-10 w-10 items-center justify-center rounded-full"
-              style={{
-                backgroundColor: canSend ? colors.userBubble : colors.disabledButton,
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Send message"
+          <View style={{ padding: 12 }}>
+            <View
+              className="flex-row items-end rounded-2xl border px-3 py-2"
+              style={{ borderColor: colors.border, backgroundColor: colors.card }}
             >
-              <Ionicons name="send" size={18} color="#ffffff" />
-            </Pressable>
+              <TextInput
+                value={input}
+                onChangeText={setInput}
+                placeholder="Ask about your spending..."
+                placeholderTextColor={colors.secondary}
+                multiline
+                maxLength={1000}
+                className="max-h-32 flex-1 py-2 text-base"
+                style={{ color: colors.primary }}
+              />
+
+              <Pressable
+                onPress={() => void handleSend()}
+                disabled={!canSend}
+                className="ml-2 h-10 w-10 items-center justify-center rounded-full"
+                style={{
+                  backgroundColor: canSend ? colors.userBubble : colors.disabledButton,
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Send message"
+              >
+                <Ionicons name="send" size={18} color="#ffffff" />
+              </Pressable>
+            </View>
           </View>
         </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
