@@ -6,11 +6,13 @@ import { router } from "expo-router";
 import { Alert, Animated, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
+  clearBudget,
   getBudget,
   getExpenses,
   setBudget as saveBudget,
   type ExpenseDocument,
 } from "../../lib/appwrite";
+import { markCurrentBudgetMonth, syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
 
 const QUICK_BUDGET_OPTIONS = [10000, 20000, 50000] as const;
 const formatBudgetInputValue = (amount: number) => {
@@ -36,6 +38,7 @@ export default function Budget() {
   const [savedBudgetInINR, setSavedBudgetInINR] = useState<number>(0);
   const [spentAmountInINR, setSpentAmountInINR] = useState<number>(0);
   const [expenses, setExpenses] = useState<ExpenseDocument[]>([]);
+  const [budgetCycleMessage, setBudgetCycleMessage] = useState("");
   const animatedWidth = useRef(new Animated.Value(0)).current;
 
   useFocusEffect(
@@ -50,14 +53,22 @@ export default function Budget() {
           ]);
 
           if (isActive) {
-            const nextSavedBudget = budgetFromDb ?? 0;
+            const { budgetAmount: activeBudget, wasReset } = await syncBudgetForCurrentMonth(
+              budgetFromDb,
+              clearBudget
+            );
+            const nextSavedBudget = activeBudget ?? 0;
             setSpentAmountInINR(
               expensesFromDb.reduce((total, expense) => total + Number(expense.amount || 0), 0)
             );
             setExpenses(expensesFromDb);
             setSavedBudgetInINR(nextSavedBudget);
+            setBudgetLocal(nextSavedBudget);
             setBudgetValue(formatBudgetInputValue(convertFromINR(nextSavedBudget)));
             setIsEditing(nextSavedBudget <= 0);
+            setBudgetCycleMessage(
+              wasReset ? "New month detected. Set a fresh budget for this month." : ""
+            );
           }
         } catch (error) {
           console.error("Failed to load budget data", error);
@@ -69,7 +80,7 @@ export default function Budget() {
       return () => {
         isActive = false;
       };
-    }, [convertFromINR])
+    }, [convertFromINR, setBudgetLocal])
   );
   const colors = isDarkMode
     ? {
@@ -116,6 +127,14 @@ export default function Budget() {
   const usagePercent = numericBudget > 0 ? (spentAmount / numericBudget) * 100 : 0;
   const selectedQuickBudget = QUICK_BUDGET_OPTIONS.find((option) => option === numericBudget);
   const lastMonthSpending = convertFromINR(18000);
+  const smartAlertMessage =
+    numericBudget <= 0
+      ? ""
+      : usagePercent > 100
+        ? "Budget exceeded!"
+        : usagePercent > 80
+          ? "You've used 80% of your budget"
+          : "";
 
   let health = "Healthy";
   let healthColor = "#16a34a";
@@ -171,10 +190,12 @@ export default function Budget() {
       }
 
       await saveBudget({ amount: Number(budgetInINR) });
+      await markCurrentBudgetMonth();
       setBudgetLocal(budgetInINR);
       setSavedBudgetInINR(budgetInINR);
       setBudgetValue(formatBudgetInputValue(parsedBudget));
       setIsEditing(false);
+      setBudgetCycleMessage("");
       Alert.alert("Success", "Budget updated successfully");
     } catch (error) {
       console.error("Failed to save budget", error);
@@ -220,6 +241,11 @@ export default function Budget() {
         <Text className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: colors.secondary }}>
           Current Budget: {hasSavedBudget ? formatAmount(savedBudgetInINR) : "No budget saved yet"}
         </Text>
+        {budgetCycleMessage ? (
+          <Text className="mb-3 text-sm font-medium" style={{ color: colors.warningText }}>
+            {budgetCycleMessage}
+          </Text>
+        ) : null}
         <Text className="mb-2 text-sm font-semibold" style={{ color: colors.secondary }}>
           Monthly Budget Amount ({currency})
         </Text>
@@ -356,11 +382,11 @@ export default function Budget() {
               </View>
             )}
 
-            {usagePercent > 80 && (
+            {smartAlertMessage ? (
               <Text className="mt-2 text-sm font-semibold" style={{ color: colors.warningText }}>
-                You are close to exceeding your budget.
+                {smartAlertMessage}
               </Text>
-            )}
+            ) : null}
 
             <Text className="mt-3 text-sm" style={{ color: colors.secondary }}>
               {`📊 Last month: ${currency} ${lastMonthSpending.toFixed(2)}`}

@@ -1,11 +1,18 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
-import { useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Animated, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../../Context/ExpenseContext";
-import { account, getBudget, getExpenses, type ExpenseDocument } from "../../lib/appwrite";
+import {
+  account,
+  clearBudget,
+  getBudget,
+  getExpenses,
+  type ExpenseDocument,
+} from "../../lib/appwrite";
+import { syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
 
 export default function Home() {
   const { isDarkMode, formatAmount } = useContext(ExpenseContext);
@@ -23,6 +30,7 @@ export default function Home() {
   const cappedPercentageUsed = Math.max(0, Math.min(percentageUsed, 100));
   const [progressTrackWidth, setProgressTrackWidth] = useState(0);
   const [progressWidth] = useState(() => new Animated.Value(0));
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const nextWidth = (progressTrackWidth * cappedPercentageUsed) / 100;
@@ -33,20 +41,69 @@ export default function Home() {
     }).start();
   }, [cappedPercentageUsed, progressTrackWidth, progressWidth]);
 
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+  }, [fadeAnim]);
+
   const recentTransactions = [...expenses]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 3);
+    .slice(0, 8);
 
-  const formatShortDate = (dateValue: string) => {
+  const formatDateLabel = (dateValue: string) => {
     const date = new Date(dateValue);
+
     if (Number.isNaN(date.getTime())) {
       return dateValue;
     }
+
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) {
+      return "Today";
+    }
+
+    if (date.toDateString() === yesterday.toDateString()) {
+      return "Yesterday";
+    }
+
     return new Intl.DateTimeFormat(undefined, {
       month: "short",
       day: "numeric",
     }).format(date);
   };
+
+  const formatTimeLabel = (dateValue: string) => {
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  };
+
+  const groupedRecentTransactions = recentTransactions.reduce<Record<string, ExpenseDocument[]>>(
+    (groups, expense) => {
+      const label = formatDateLabel(expense.date);
+
+      if (!groups[label]) {
+        groups[label] = [];
+      }
+
+      groups[label].push(expense);
+      return groups;
+    },
+    {}
+  );
 
   const statusIndicator =
     percentageUsed < 50
@@ -69,6 +126,15 @@ export default function Home() {
             background: isDarkMode ? "#450a0a" : "#fee2e2",
             text: isDarkMode ? "#fca5a5" : "#991b1b",
           };
+
+  const smartAlertMessage =
+    budgetAmount <= 0
+      ? ""
+      : percentageUsed > 100
+        ? "Budget exceeded!"
+        : percentageUsed > 80
+          ? "You've used 80% of your budget"
+          : "";
 
   const remainingAmountColor =
     remaining >= 0 ? (isDarkMode ? "#86efac" : "#16a34a") : (isDarkMode ? "#fca5a5" : "#dc2626");
@@ -106,8 +172,12 @@ export default function Home() {
       const fetchBudget = async () => {
         try {
           const result = await getBudget();
+          const { budgetAmount: activeBudget } = await syncBudgetForCurrentMonth(
+            result,
+            clearBudget
+          );
           if (isActive) {
-            setBudgetState(result);
+            setBudgetState(activeBudget);
           }
         } catch (error) {
           console.error("Failed to fetch budget", error);
@@ -209,6 +279,19 @@ export default function Home() {
         contentContainerStyle={{ paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
       >
+      <Animated.View
+        style={{
+          opacity: fadeAnim,
+          transform: [
+            {
+              translateY: fadeAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [12, 0],
+              }),
+            },
+          ],
+        }}
+      >
       <View className="mb-6 flex-row items-start justify-between">
         <View>
           <Text className="text-3xl font-extrabold" style={{ color: colors.primary }}>
@@ -221,7 +304,11 @@ export default function Home() {
         <Pressable
           onPress={() => router.push("/advisor")}
           className="h-11 w-11 items-center justify-center rounded-full"
-          style={{ backgroundColor: colors.subtle }}
+          style={({ pressed }) => ({
+            backgroundColor: colors.subtle,
+            transform: [{ scale: pressed ? 0.95 : 1 }],
+            opacity: pressed ? 0.9 : 1,
+          })}
           accessibilityRole="button"
           accessibilityLabel="Open AI Financial Advisor"
         >
@@ -303,12 +390,26 @@ export default function Home() {
             {`${statusIndicator.icon} ${statusIndicator.message}`}
           </Text>
         </View>
+
+        {smartAlertMessage ? (
+          <Text
+            className="mt-3 text-sm font-semibold"
+            style={{ color: isDarkMode ? "#fca5a5" : "#dc2626" }}
+          >
+            {smartAlertMessage}
+          </Text>
+        ) : null}
       </View>
 
       <View className="gap-3">
         <Pressable
           onPress={() => router.push("/add-expense")}
           className="rounded-xl bg-blue-600 px-5 py-4"
+          style={({ pressed }) => ({
+            backgroundColor: "#2563eb",
+            transform: [{ scale: pressed ? 0.97 : 1 }],
+            opacity: pressed ? 0.94 : 1,
+          })}
         >
           <View className="flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
@@ -322,6 +423,11 @@ export default function Home() {
         <Pressable
           onPress={() => router.push("/reports")}
           className="rounded-xl bg-emerald-600 px-5 py-4"
+          style={({ pressed }) => ({
+            backgroundColor: "#059669",
+            transform: [{ scale: pressed ? 0.97 : 1 }],
+            opacity: pressed ? 0.94 : 1,
+          })}
         >
           <View className="flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
@@ -335,6 +441,11 @@ export default function Home() {
         <Pressable
           onPress={() => router.push("/budget")}
           className="rounded-xl bg-violet-600 px-5 py-4"
+          style={({ pressed }) => ({
+            backgroundColor: "#7c3aed",
+            transform: [{ scale: pressed ? 0.97 : 1 }],
+            opacity: pressed ? 0.94 : 1,
+          })}
         >
           <View className="flex-row items-center justify-between">
             <View className="flex-row items-center gap-3">
@@ -358,23 +469,31 @@ export default function Home() {
             No transactions yet
           </Text>
         ) : (
-          recentTransactions.map((expense) => (
-            <View
-              key={expense.$id}
-              className="mt-3 flex-row items-center justify-between rounded-xl px-3 py-2"
-              style={{ backgroundColor: colors.subtle }}
-            >
-              <View>
-                <Text className="font-semibold" style={{ color: colors.primary }}>
-                  {expense.category}
-                </Text>
-                <Text className="text-xs" style={{ color: colors.secondary }}>
-                  {formatShortDate(expense.date)}
-                </Text>
-              </View>
-              <Text className="font-semibold" style={{ color: colors.primary }}>
-                {formatAmount(getExpenseAmount(expense))}
+          Object.entries(groupedRecentTransactions).map(([label, group]) => (
+            <View key={label} className="mt-4">
+              <Text className="mb-2 text-sm font-semibold" style={{ color: colors.secondary }}>
+                {label}
               </Text>
+
+              {group.map((expense) => (
+                <View
+                  key={expense.$id}
+                  className="mb-2 flex-row items-center justify-between rounded-xl px-3 py-3"
+                  style={{ backgroundColor: colors.subtle }}
+                >
+                  <View className="flex-1 pr-4">
+                    <Text className="font-semibold" style={{ color: colors.primary }}>
+                      {expense.category}
+                    </Text>
+                    <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>
+                      {formatTimeLabel(expense.date)}
+                    </Text>
+                  </View>
+                  <Text className="font-semibold" style={{ color: colors.primary }}>
+                    {formatAmount(getExpenseAmount(expense))}
+                  </Text>
+                </View>
+              ))}
             </View>
           ))
         )}
@@ -391,6 +510,7 @@ export default function Home() {
           {spendingInsight}
         </Text>
       </View>
+      </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );
