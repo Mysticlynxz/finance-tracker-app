@@ -11,6 +11,8 @@ const EXTRACTION_FALLBACK = {
   amount: 0,
 } as const;
 
+const EMPTY_EXPENSES_REPLY = "[]";
+
 interface GeminiContentPart {
   text?: string;
 }
@@ -31,22 +33,27 @@ interface GeminiGenerateContentResponse {
 const getGeminiApiKey = () =>
   process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim() || "";
 
-const buildGeminiExpensePrompt = (transcribedText: string) => `Extract expense details from this sentence:
+const buildGeminiExpensePrompt = (transcribedText: string) => `Extract ALL expenses from the following sentence.
 
-"${transcribedText}"
+Return ONLY valid JSON array.
 
-Return ONLY valid JSON:
-{
-  "category": "string",
-  "amount": number
-}
+Each item must have:
+- amount (number)
+- category (string)
 
-Rules:
-- Category should be a single word (Food, Travel, etc.)
-- Amount must be a number
-- If missing -> amount = 0
-- If unclear -> category = "Other"
-- No explanation, only JSON`;
+Example:
+Input: I spent 200 on food and 500 on travel
+
+Output:
+[
+  { "amount": 200, "category": "Food" },
+  { "amount": 500, "category": "Travel" }
+]
+
+If category is unclear, use "Other".
+
+Now process:
+${transcribedText}`;
 
 const parseGeminiResponse = async (
   response: Response
@@ -99,16 +106,19 @@ const requestGeminiExpenseExtractionReply = async (
       generationConfig: {
         response_mime_type: "application/json",
         response_schema: {
-          type: "OBJECT",
-          properties: {
-            category: {
-              type: "STRING",
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              category: {
+                type: "STRING",
+              },
+              amount: {
+                type: "NUMBER",
+              },
             },
-            amount: {
-              type: "NUMBER",
-            },
+            required: ["category", "amount"],
           },
-          required: ["category", "amount"],
         },
       },
     }),
@@ -144,6 +154,21 @@ const canonicalizeCategoryName = (category: string) => {
 };
 
 export const normalizeExpenseText = (text: string) => text.trim().toLowerCase();
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const normalizeParsedExpenses = (parsed: unknown): Record<string, unknown>[] => {
+  if (Array.isArray(parsed)) {
+    return parsed.filter(isRecord);
+  }
+
+  if (isRecord(parsed)) {
+    return [parsed];
+  }
+
+  return [];
+};
 
 export const buildValidExpenseCategories = (userCategories: string[] = []) => {
   const uniqueCategories: string[] = [];
@@ -198,12 +223,17 @@ export const loadValidExpenseCategories = async (): Promise<string[]> => {
   }
 };
 
-export interface ExpenseExtractionResult {
+export interface ExtractedExpense {
   amount: number;
   category: string;
   rawCategory: string;
-  reply: string;
   parsed: Record<string, unknown>;
+}
+
+export interface ExpenseExtractionResult {
+  expenses: ExtractedExpense[];
+  reply: string;
+  parsed: unknown;
   validCategories: string[];
 }
 
@@ -220,20 +250,15 @@ export const extractExpenseFromUserText = async (
   console.log("User text:", trimmedUserText);
 
   if (!trimmedUserText) {
-    const reply = JSON.stringify(EXTRACTION_FALLBACK);
-    const parsed = { ...EXTRACTION_FALLBACK };
+    const reply = EMPTY_EXPENSES_REPLY;
+    const parsed: Record<string, unknown>[] = [];
 
     console.log("Gemini raw:", reply);
     console.log("Parsed:", parsed);
-    console.log("Final:", {
-      matchedCategory: EXTRACTION_FALLBACK.category,
-      amount: EXTRACTION_FALLBACK.amount,
-    });
+    console.log("Final:", []);
 
     return {
-      amount: EXTRACTION_FALLBACK.amount,
-      category: EXTRACTION_FALLBACK.category,
-      rawCategory: EXTRACTION_FALLBACK.category,
+      expenses: [],
       reply,
       parsed,
       validCategories,
@@ -255,29 +280,42 @@ export const extractExpenseFromUserText = async (
 
   console.log("Gemini raw:", reply);
 
-  let parsed: Record<string, unknown>;
+  let parsed: unknown;
 
   try {
-    parsed = JSON.parse(reply) as Record<string, unknown>;
+    parsed = JSON.parse(reply) as unknown;
   } catch {
-    parsed = { ...EXTRACTION_FALLBACK };
+    parsed = [];
   }
 
   console.log("Parsed:", parsed);
 
-  const rawCategory =
-    typeof parsed.category === "string" && parsed.category.trim()
-      ? parsed.category.trim()
-      : EXTRACTION_FALLBACK.category;
-  const amount = Number(parsed.amount) || 0;
-  const matchedCategory = matchExpenseCategory(rawCategory, validCategories);
+  const expenses = normalizeParsedExpenses(parsed).map((expense) => {
+    const rawCategory =
+      typeof expense.category === "string" && expense.category.trim()
+        ? expense.category.trim()
+        : EXTRACTION_FALLBACK.category;
+    const amount = Number(expense.amount) || 0;
+    const matchedCategory = matchExpenseCategory(rawCategory, validCategories);
 
-  console.log("Final:", { matchedCategory, amount });
+    return {
+      amount,
+      category: matchedCategory,
+      rawCategory,
+      parsed: expense,
+    };
+  });
+
+  console.log(
+    "Final:",
+    expenses.map(({ category, amount }) => ({
+      matchedCategory: category,
+      amount,
+    }))
+  );
 
   return {
-    amount,
-    category: matchedCategory,
-    rawCategory,
+    expenses,
     reply,
     parsed,
     validCategories,

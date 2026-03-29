@@ -2,7 +2,16 @@ import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useContext, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Animated, Modal, Pressable, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Modal,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
 import { createExpense } from "../lib/appwrite";
@@ -18,7 +27,7 @@ interface DetectedExpense {
 export default function VoiceInputScreen() {
   const { isDarkMode } = useContext(ExpenseContext);
   const { recording, startRecording, stopRecording } = useAudioRecorder();
-  const [detectedExpense, setDetectedExpense] = useState<DetectedExpense | null>(null);
+  const [detectedExpenses, setDetectedExpenses] = useState<DetectedExpense[]>([]);
   const [isSavingExpense, setIsSavingExpense] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -45,38 +54,42 @@ export default function VoiceInputScreen() {
 
     console.log("Transcribed text:", transcribedText);
 
-    const { amount, category: matchedCategory } = await extractExpenseFromUserText(transcribedText);
+    const { expenses } = await extractExpenseFromUserText(transcribedText);
+    const validExpenses = expenses
+      .filter((expense) => Number.isFinite(expense.amount) && expense.amount > 0)
+      .map(({ amount, category }) => ({
+        amount,
+        matchedCategory: category,
+      }));
 
-    if (!Number.isFinite(amount) || amount <= 0) {
-      Alert.alert("Invalid amount", "Detected amount must be greater than 0.");
-      setDetectedExpense(null);
+    if (validExpenses.length === 0) {
+      Alert.alert("No expenses found", "No valid expenses were detected in that recording.");
+      setDetectedExpenses([]);
       return;
     }
 
-    setDetectedExpense({
-      amount,
-      matchedCategory,
-    });
+    setDetectedExpenses(validExpenses);
   };
 
   const handleConfirmExpense = async () => {
-    if (!detectedExpense || isSavingExpense) {
+    if (detectedExpenses.length === 0 || isSavingExpense) {
       return;
     }
-
-    const { amount, matchedCategory } = detectedExpense;
 
     setIsSavingExpense(true);
 
     try {
-      await createExpense({
-        amount,
-        category: matchedCategory,
-        date: new Date().toISOString(),
-      });
+      for (const { amount, matchedCategory } of detectedExpenses) {
+        await createExpense({
+          amount,
+          category: matchedCategory,
+          date: new Date().toISOString(),
+        });
 
-      console.log("Saved:", { amount, matchedCategory });
-      setDetectedExpense(null);
+        console.log("Saved:", { amount, matchedCategory });
+      }
+
+      setDetectedExpenses([]);
       router.replace("/home");
     } catch (error) {
       console.error("[Voice Input] Save failed:", error);
@@ -91,7 +104,7 @@ export default function VoiceInputScreen() {
       return;
     }
 
-    setDetectedExpense(null);
+    setDetectedExpenses([]);
   };
 
   const handleStop = async () => {
@@ -144,11 +157,8 @@ export default function VoiceInputScreen() {
         accent: "#059669",
       };
 
-  const detectedAmountLabel = detectedExpense
-    ? Number.isInteger(detectedExpense.amount)
-      ? detectedExpense.amount.toString()
-      : detectedExpense.amount.toFixed(2)
-    : "0";
+  const formatDetectedAmount = (amount: number) =>
+    Number.isInteger(amount) ? amount.toString() : amount.toFixed(2);
 
   return (
     <SafeAreaView className="flex-1" style={{ backgroundColor: colors.screen }}>
@@ -178,7 +188,9 @@ export default function VoiceInputScreen() {
         >
           <View
             className="mb-5 h-20 w-20 items-center justify-center rounded-full"
-            style={{ backgroundColor: isRecording ? "#fee2e2" : isDarkMode ? "#052e2b" : "#d1fae5" }}
+            style={{
+              backgroundColor: isRecording ? "#fee2e2" : isDarkMode ? "#052e2b" : "#d1fae5",
+            }}
           >
             <Ionicons
               name={isRecording ? "radio-button-on" : "mic"}
@@ -228,7 +240,7 @@ export default function VoiceInputScreen() {
                 opacity: isProcessing || isSavingExpense ? 0.6 : 1,
               }}
             >
-              <Text style={{ color: "white", fontSize: 28 }}>🎤</Text>
+              <Ionicons name="mic" size={28} color="#ffffff" />
             </Pressable>
           </Animated.View>
 
@@ -269,7 +281,7 @@ export default function VoiceInputScreen() {
       )}
 
       <Modal
-        visible={Boolean(detectedExpense)}
+        visible={detectedExpenses.length > 0}
         animationType="fade"
         transparent
         onRequestClose={handleCancelConfirmation}
@@ -286,29 +298,44 @@ export default function VoiceInputScreen() {
             }}
           >
             <Text className="text-xl font-bold" style={{ color: colors.primary }}>
-              Detected Expense:
+              {detectedExpenses.length === 1 ? "Detected Expense:" : "Detected Expenses:"}
             </Text>
 
-            <View
-              className="mt-5 rounded-2xl border p-4"
-              style={{
-                backgroundColor: isDarkMode ? "#111827" : "#eff6ff",
-                borderColor: colors.border,
-              }}
+            <ScrollView
+              className="mt-5"
+              showsVerticalScrollIndicator={false}
+              style={{ maxHeight: 280 }}
             >
-              <Text className="text-sm" style={{ color: colors.secondary }}>
-                Category:{" "}
-                <Text className="font-semibold" style={{ color: colors.primary }}>
-                  {detectedExpense?.matchedCategory ?? "Other"}
-                </Text>
-              </Text>
-              <Text className="mt-2 text-sm" style={{ color: colors.secondary }}>
-                Amount:{" "}
-                <Text className="font-semibold" style={{ color: colors.primary }}>
-                  ₹{detectedAmountLabel}
-                </Text>
-              </Text>
-            </View>
+              {detectedExpenses.map((expense, index) => (
+                <View
+                  key={`${expense.matchedCategory}-${expense.amount}-${index}`}
+                  className="mb-3 rounded-2xl border p-4"
+                  style={{
+                    backgroundColor: isDarkMode ? "#111827" : "#eff6ff",
+                    borderColor: colors.border,
+                  }}
+                >
+                  <Text className="text-sm" style={{ color: colors.secondary }}>
+                    Category:{" "}
+                    <Text className="font-semibold" style={{ color: colors.primary }}>
+                      {expense.matchedCategory}
+                    </Text>
+                  </Text>
+                  <Text className="mt-2 text-sm" style={{ color: colors.secondary }}>
+                    Amount:{" "}
+                    <Text className="font-semibold" style={{ color: colors.primary }}>
+                      ₹{formatDetectedAmount(expense.amount)}
+                    </Text>
+                  </Text>
+                </View>
+              ))}
+            </ScrollView>
+
+            <Text className="text-sm" style={{ color: colors.secondary }}>
+              {detectedExpenses.length === 1
+                ? "Confirm to save this expense."
+                : `Confirm to save ${detectedExpenses.length} expenses.`}
+            </Text>
 
             <Pressable
               onPress={() => {
@@ -327,7 +354,10 @@ export default function VoiceInputScreen() {
               onPress={handleCancelConfirmation}
               disabled={isSavingExpense}
               className="mt-3 items-center rounded-2xl px-6 py-4"
-              style={{ backgroundColor: isDarkMode ? "#1e293b" : "#e2e8f0", opacity: isSavingExpense ? 0.7 : 1 }}
+              style={{
+                backgroundColor: isDarkMode ? "#1e293b" : "#e2e8f0",
+                opacity: isSavingExpense ? 0.7 : 1,
+              }}
             >
               <Text className="text-base font-semibold" style={{ color: colors.primary }}>
                 Cancel

@@ -3,7 +3,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import { ExpenseContext } from "../../Context/ExpenseContext";
 import { router } from "expo-router";
-import { Alert, Animated, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Animated, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   getBudget,
@@ -106,6 +106,7 @@ export default function Budget() {
       };
 
   const numericBudget = Number(budget) || 0;
+  const hasInput = budget.trim().length > 0;
   const hasSavedBudget = savedBudgetInINR > 0;
   const spentAmount = convertFromINR(spentAmountInINR);
   const suggestedBudget = Math.round(spentAmount * 1.5);
@@ -182,7 +183,16 @@ export default function Budget() {
   };
 
   return (
-    <SafeAreaView className="flex-1 px-6 py-4" style={{ backgroundColor: colors.screen }}>
+    <SafeAreaView className="flex-1" style={{ backgroundColor: colors.screen }}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{
+          paddingHorizontal: 24,
+          paddingTop: 16,
+          paddingBottom: 32,
+        }}
+      >
       <View className="mb-6 flex-row items-center gap-3">
         <View
           className="h-11 w-11 items-center justify-center rounded-full"
@@ -285,6 +295,18 @@ export default function Budget() {
           </View>
         )}
 
+        {(isEditing || numericBudget === 0 || hasInput) && (
+          <Pressable
+            onPress={handleSave}
+            className="mt-4 items-center rounded-xl bg-violet-600 py-4"
+          >
+            <View className="flex-row items-center gap-2">
+              <Ionicons name="checkmark-circle-outline" size={20} color="#ffffff" />
+              <Text className="text-base font-semibold text-white">Save Budget</Text>
+            </View>
+          </Pressable>
+        )}
+
         <View className="mt-5 rounded-2xl border p-4" style={{ backgroundColor: colors.statBg, borderColor: colors.border }}>
           <View className="flex-row items-center justify-between">
             <Text className="text-sm font-semibold" style={{ color: colors.primary }}>
@@ -370,18 +392,6 @@ export default function Budget() {
       </View>
 
       <View className="mt-6 gap-3">
-        {(isEditing || numericBudget === 0) && (
-          <Pressable
-            onPress={handleSave}
-            className="items-center rounded-xl bg-violet-600 py-4"
-          >
-            <View className="flex-row items-center gap-2">
-              <Ionicons name="checkmark-circle-outline" size={20} color="#ffffff" />
-              <Text className="text-base font-semibold text-white">Save Budget</Text>
-            </View>
-          </Pressable>
-        )}
-
         <Pressable
           onPress={() => router.replace("/home")}
           className="items-center rounded-xl border py-4"
@@ -392,6 +402,7 @@ export default function Budget() {
           </Text>
         </Pressable>
       </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
