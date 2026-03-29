@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -6,9 +6,11 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Platform,
   Pressable,
   Text,
   TextInput,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -200,8 +202,13 @@ export default function AdvisorScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.screen }}>
-      <View style={{ flex: 1 }}>
-        <KeyboardAvoidingView className="flex-1" behavior="padding">
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={80}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <View style={{ flex: 1 }}>
           <View
             className="flex-row items-center gap-3 border-b px-4 pb-3 pt-2"
             style={{ borderColor: colors.border }}
@@ -215,6 +222,21 @@ export default function AdvisorScreen() {
             >
               <Ionicons name="chevron-back" size={20} color={colors.primary} />
             </Pressable>
+
+            <View
+              className="items-center justify-center rounded-full"
+              style={{
+                backgroundColor: isDarkMode ? "#172554" : "#dbeafe",
+                width: 44,
+                height: 44,
+              }}
+            >
+              <MaterialCommunityIcons
+                name="chart-line-variant"
+                size={24}
+                color="#3b82f6"
+              />
+            </View>
 
             <View>
               <Text className="text-lg font-bold" style={{ color: colors.primary }}>
@@ -255,6 +277,7 @@ export default function AdvisorScreen() {
                     style={{
                       width: "100%",
                       alignItems: isUser ? "flex-end" : "flex-start",
+                      paddingHorizontal: 12,
                     }}
                   >
                     <View
@@ -263,17 +286,16 @@ export default function AdvisorScreen() {
                         padding: 12,
                         borderRadius: 12,
                         marginVertical: 4,
-                        maxWidth: isUser ? "72%" : "85%",
-                        minWidth: 0,
-                        ...(isUser ? {} : { flexShrink: 1 }),
+                        maxWidth: isUser ? "75%" : "80%",
+                        alignSelf: isUser ? "flex-end" : "flex-start",
                       }}
                     >
                       <Text
                         style={{
                           color: isUser ? "white" : "black",
                           flexWrap: "wrap",
+                          flexShrink: 1,
                           lineHeight: 20,
-                          ...(isUser ? {} : { flexShrink: 1 }),
                         }}
                       >
                         {message.text}
@@ -300,44 +322,47 @@ export default function AdvisorScreen() {
           </View>
 
           <View
-            className="border-t"
-            style={{ borderColor: colors.border, backgroundColor: colors.screen }}
+            style={{
+              padding: 12,
+              borderTopWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.screen,
+            }}
           >
-            <View style={{ padding: 12 }}>
-              <View
-                className="flex-row items-end rounded-2xl border px-3 py-2"
-                style={{ borderColor: colors.border, backgroundColor: colors.card }}
-              >
-                <TextInput
-                  value={input}
-                  onChangeText={setInput}
-                  placeholder="Ask about your spending..."
-                  placeholderTextColor={colors.secondary}
-                  multiline
-                  maxLength={1000}
-                  className="max-h-32 flex-1 py-2 text-base"
-                  style={{ color: colors.primary }}
-                />
+            <View
+              className="flex-row items-end rounded-2xl border px-3 py-2"
+              style={{ borderColor: colors.border, backgroundColor: colors.card }}
+            >
+              <TextInput
+                value={input}
+                onChangeText={setInput}
+                placeholder="Ask about your spending..."
+                placeholderTextColor={colors.secondary}
+                multiline
+                maxLength={1000}
+                className="max-h-32 flex-1 py-2 text-base"
+                style={{ color: colors.primary }}
+              />
 
-                <Pressable
-                  onPress={() => {
-                    void handleSend();
-                  }}
-                  disabled={!canSend}
-                  className="ml-2 h-10 w-10 items-center justify-center rounded-full"
-                  style={{
-                    backgroundColor: canSend ? colors.userBubble : colors.disabledButton,
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Send message"
-                >
-                  <Ionicons name="send" size={18} color="#ffffff" />
-                </Pressable>
-              </View>
+              <Pressable
+                onPress={() => {
+                  void handleSend();
+                }}
+                disabled={!canSend}
+                className="ml-2 h-10 w-10 items-center justify-center rounded-full"
+                style={{
+                  backgroundColor: canSend ? colors.userBubble : colors.disabledButton,
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Send message"
+              >
+                <Ionicons name="send" size={18} color="#ffffff" />
+              </Pressable>
             </View>
           </View>
-        </KeyboardAvoidingView>
-      </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

@@ -5,8 +5,6 @@ console.log("Function started");
 
 const AI_ADVISOR_FALLBACK =
   "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
-const NO_EXPENSES_FALLBACK =
-  "Add some expenses first \u2014 your wallet is still a mystery \u{1F604}";
 const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
@@ -43,15 +41,20 @@ const currencyConfig = {
 };
 
 const ADVISOR_SYSTEM_PROMPT = `
-You are a smart and slightly humorous financial advisor inside a budgeting app.
-Give short, practical, and personalized advice based on the user's expenses and budget.
-Use light humor occasionally, but keep it friendly and useful.
+You are a friendly AI financial advisor.
 
-Response style rules:
-- Always reply as a markdown bullet list with 3 to 5 bullet points maximum.
-- Keep each bullet short, practical, and tied to the user's budget or spending categories.
-- Add only light humor when it fits, for example "Your wallet is crying \u{1F605}" or "That coffee habit is expensive \u{1F440}".
-- Do not overdo jokes, sarcasm, or emojis.
+- Respond conversationally to greetings (for example: hello, hi, hey).
+- Maintain a slightly humorous and friendly tone.
+- If the user asks about spending, budgets, or finance, provide helpful insights.
+- Keep responses short, clear, and engaging.
+
+Examples:
+
+User: Hello
+AI: Hey there! Ready to take control of your finances today?
+
+User: How much did I spend?
+AI: Here's a quick breakdown of your spending...
 `.trim();
 
 const APPWRITE_ENDPOINT =
@@ -317,10 +320,6 @@ Rules:
 const buildAdvisorReply = async ({ apiKey, currency, financialContext, message, log }) => {
   const { userId, budget, expenses } = financialContext;
 
-  if (!expenses || expenses.length === 0) {
-    return NO_EXPENSES_FALLBACK;
-  }
-
   const formattedExpenses = expenses
     .map((expense) => {
       const convertedAmount = convertFromINR(expense.amount, currency);
@@ -333,27 +332,29 @@ const buildAdvisorReply = async ({ apiKey, currency, financialContext, message, 
       ? "Not set"
       : formatCurrency(convertFromINR(budget, currency), currency);
 
-  const prompt = `
-You are a smart and slightly humorous financial advisor inside a budgeting app.
+  const expensesSection = formattedExpenses || "No expenses recorded yet.";
 
+  const prompt = `
 User preferred currency: ${currency}
 
 IMPORTANT RULES:
 - All values are already converted to ${currency}
 - DO NOT use INR in your response
 - ALWAYS use the correct currency symbol for ${currency}
-- Keep responses short and practical in 3 to 5 bullet points
-- Add light friendly humor occasionally
+- If the user is just greeting you, reply naturally and briefly.
+- If the user is asking about finances, use the budget and expenses below when helpful.
+- If no expenses are recorded yet, say that naturally and suggest a simple next step.
+- Keep the reply short, clear, and engaging.
 
 Budget: ${formattedBudget}
 
 Expenses:
-${formattedExpenses}
+${expensesSection}
 
 User Question:
 ${message}
 
-Give personalized financial advice based on the data.
+Now respond to the user's message.
 `.trim();
 
   log(`Generating advisor reply for user ${userId} in ${currency}`);

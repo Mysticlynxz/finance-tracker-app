@@ -305,17 +305,17 @@ export default function Home() {
           onPress={() => router.push("/advisor")}
           className="h-11 w-11 items-center justify-center rounded-full"
           style={({ pressed }) => ({
-            backgroundColor: colors.subtle,
+            backgroundColor: isDarkMode ? "#172554" : "#dbeafe",
             transform: [{ scale: pressed ? 0.95 : 1 }],
             opacity: pressed ? 0.9 : 1,
           })}
           accessibilityRole="button"
           accessibilityLabel="Open AI Financial Advisor"
         >
-          <Ionicons
-            name="sparkles-outline"
-            size={20}
-            color={isDarkMode ? "#60a5fa" : "#2563eb"}
+          <MaterialCommunityIcons
+            name="chart-line-variant"
+            size={22}
+            color="#3b82f6"
           />
         </Pressable>
       </View>
