@@ -27,11 +27,18 @@ Use the existing Storage bucket whose configured ID is
 `spendwise-voice-recordings`; do not recreate it. Verify **File Security** is
 enabled, authenticated users have bucket-level **Create** only, and there are
 no public or bucket-level Read, Update, or Delete permissions. Verify its
-maximum file size is at least 5 MB and `audio/mp4` is allowed; do not change
-existing settings unless they conflict with these requirements. Native Android
-and iOS recordings are uploaded as M4A/AAC. Uploads are assigned only owner
-Read and Delete file permissions; the function rejects files with any
-additional file permission.
+maximum file size is at least 5 MB and the `m4a` extension is allowed; do not
+change existing settings unless they conflict with these requirements. Native
+Android recordings use an MPEG-4 container with AAC audio; iOS recordings use
+MPEG-4 AAC. The mobile upload declares `audio/mp4`. If Appwrite reports a
+`.m4a` file as `video/mp4`, the function checks the downloaded MP4 container
+and sends it to Gnani as `audio/mp4`. Uploads are assigned only owner Read and
+Delete file permissions; the function rejects files with any additional file
+permission.
+
+The local `appwrite.config.json` deploys the Function only; it does not manage
+Storage bucket settings. Changing or redeploying this Function does not set the
+bucket's allowed extensions.
 
 In the `ai-advisor` Function's variables, set `GNANI_API_KEY` as a protected
 server-side variable. Retain `GEMINI_API_KEY` for the advisor and expense

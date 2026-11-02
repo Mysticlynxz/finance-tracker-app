@@ -408,7 +408,7 @@ const isSupportedVoiceFile = (file) => {
   const fileName = typeof file?.name === "string" ? file.name.toLowerCase() : "";
   const extension = fileName.split(".").pop();
   const supportedTypes = new Map([
-    ["m4a", new Set(["audio/mp4", "audio/m4a", "audio/x-m4a"])],
+    ["m4a", new Set(["audio/mp4", "audio/m4a", "audio/x-m4a", "video/mp4"])],
     ["aac", new Set(["audio/aac", "audio/mp4"])],
   ]);
   const validMimeTypes = supportedTypes.get(extension);
@@ -416,6 +416,11 @@ const isSupportedVoiceFile = (file) => {
   return Boolean(
     validMimeTypes?.has(typeof file?.mimeType === "string" ? file.mimeType.toLowerCase() : "")
   );
+};
+
+const getGnaniAudioMimeType = (file) => {
+  const extension = file.name.toLowerCase().split(".").pop();
+  return extension === "m4a" ? "audio/mp4" : extension === "aac" ? "audio/aac" : null;
 };
 
 const hasValidAudioContainer = (audio, file) => {
@@ -447,7 +452,15 @@ export const requestGnaniTranscription = async ({
   form.append("language_code", "indic-auto");
   form.append("format", "transcribe");
 
-  logVoiceStage(log, "prisma.request_started");
+  logVoiceStage(log, "prisma.request_started", {
+    fileName,
+    mimeType,
+    sizeBytes: audio.length,
+    recordingFormatExpected: fileName.toLowerCase().endsWith(".m4a")
+      ? "M4A/MP4 audio container; AAC configured by recorder"
+      : "AAC audio",
+    multipartField: "audio_file",
+  });
   let response;
   try {
     response = await fetch(GNANI_ENDPOINT, {
@@ -469,6 +482,7 @@ export const requestGnaniTranscription = async ({
   } catch {
     logVoiceFailure(error, "prisma.invalid_json_response", undefined, {
       httpStatus: response.status,
+      responseContentType: response.headers.get("content-type"),
     });
     throw new Error("Gnani returned an invalid response.");
   }
@@ -476,6 +490,13 @@ export const requestGnaniTranscription = async ({
   if (!response.ok || result?.success !== true || typeof result.transcript !== "string") {
     logVoiceFailure(error, "prisma.response_rejected", undefined, {
       httpStatus: response.status,
+      responseContentType: response.headers.get("content-type"),
+      upstreamErrorType:
+        typeof result?.error?.type === "string"
+          ? result.error.type
+          : typeof result?.detail?.error_code === "string"
+            ? result.detail.error_code
+            : undefined,
       success: result?.success === true,
       transcriptIsString: typeof result?.transcript === "string",
     });
@@ -484,6 +505,7 @@ export const requestGnaniTranscription = async ({
 
   logVoiceStage(log, "prisma.response_received", {
     httpStatus: response.status,
+    responseContentType: response.headers.get("content-type"),
     transcriptIsEmpty: result.transcript.trim().length === 0,
     detectedLanguagePresent: typeof result.detected_language_code === "string",
   });
@@ -564,6 +586,15 @@ const getVoiceTranscriptionResponse = async ({ req, body, log, error }) => {
       bucketMatches: file.bucketId === VOICE_RECORDINGS_BUCKET_ID,
       fileSizeValid: Number.isSafeInteger(file.sizeOriginal) && file.sizeOriginal > 0,
       mimeTypePresent: typeof file.mimeType === "string",
+      fileName: file.name,
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeOriginal,
+      recordingFormatExpected:
+        file.name.toLowerCase().endsWith(".m4a")
+          ? "M4A/MP4 container; AAC configured by mobile recorder"
+          : file.name.toLowerCase().endsWith(".aac")
+            ? "AAC elementary stream"
+            : "unsupported",
     });
   } catch (cause) {
     logVoiceFailure(error, "storage.metadata_fetch_failed", cause);
@@ -627,16 +658,32 @@ const getVoiceTranscriptionResponse = async ({ req, body, log, error }) => {
     }
 
     const audio = Buffer.from(await downloadResponse.arrayBuffer());
+    const containerValid = hasValidAudioContainer(audio, file);
+    const fileExtension = file.name.toLowerCase().split(".").pop();
+    let containerFormat = "unsupported";
+    if (fileExtension === "m4a") {
+      containerFormat = containerValid ? "MP4 container (ftyp)" : "invalid MP4 container";
+    } else if (fileExtension === "aac") {
+      containerFormat = containerValid ? "AAC ADTS" : "invalid AAC ADTS stream";
+    }
     logVoiceStage(log, "storage.download_completed", {
       downloadedSizeValid: audio.length === file.sizeOriginal,
       sizeWithinLimit: audio.length <= MAX_VOICE_RECORDING_BYTES,
+      containerValid,
+      containerFormat,
     });
     if (audio.length !== file.sizeOriginal || audio.length > MAX_VOICE_RECORDING_BYTES) {
       status = 400;
       throw new Error("Recording contents did not match the uploaded file.");
     }
 
-    if (!hasValidAudioContainer(audio, file)) {
+    if (!containerValid) {
+      status = 415;
+      throw new Error("Recording contents are not a supported audio format.");
+    }
+
+    const gnaniMimeType = getGnaniAudioMimeType(file);
+    if (!gnaniMimeType) {
       status = 415;
       throw new Error("Recording contents are not a supported audio format.");
     }
@@ -644,7 +691,7 @@ const getVoiceTranscriptionResponse = async ({ req, body, log, error }) => {
     const transcription = await requestGnaniTranscription({
       audio,
       fileName: `voice-recording.${file.name.toLowerCase().split(".").pop()}`,
-      mimeType: file.mimeType,
+      mimeType: gnaniMimeType,
       apiKey,
       log,
       error,

@@ -145,6 +145,7 @@ test("transcribes Malayalam audio with the documented multipart request and owne
   assert.equal(calls.form.get("language_code"), "indic-auto");
   assert.equal(calls.form.get("format"), "transcribe");
   assert.equal(calls.form.get("audio_file").name, "voice-recording.m4a");
+  assert.equal(calls.form.get("audio_file").type, "audio/mp4");
   assert.equal(calls.apiKeyHeader, "test-gnani-key");
   assert.equal(calls.contentTypeHeader, undefined);
   const loggedStages = result.logs
@@ -157,12 +158,37 @@ test("transcribes Malayalam audio with the documented multipart request and owne
   assert.ok(loggedStages.includes("prisma.request_started"));
   assert.ok(loggedStages.includes("prisma.response_received"));
   assert.ok(loggedStages.includes("storage.cleanup_completed"));
+  const transcriptionRequestLog = result.logs
+    .filter((message) => message.startsWith("{"))
+    .map((message) => JSON.parse(message))
+    .find((entry) => entry.stage === "prisma.request_started");
+  assert.equal(transcriptionRequestLog.fileName, "voice-recording.m4a");
+  assert.equal(transcriptionRequestLog.mimeType, "audio/mp4");
+  assert.equal(transcriptionRequestLog.sizeBytes, audioBytes.length);
+  assert.equal(transcriptionRequestLog.multipartField, "audio_file");
   assert.equal(JSON.stringify(result.logs).includes("test-user-jwt"), false);
   assert.equal(JSON.stringify(result.logs).includes("test-gnani-key"), false);
   assert.deepEqual(
     Buffer.from(await calls.form.get("audio_file").arrayBuffer()),
     audioBytes
   );
+});
+
+test("normalizes Appwrite video/mp4 metadata to audio/mp4 for validated M4A audio", async () => {
+  const calls = setupVoiceFetch({
+    file: createFile({ mimeType: "video/mp4" }),
+  });
+  const result = await callHandler(requestBody());
+  const transcriptionRequestLog = result.logs
+    .filter((message) => message.startsWith("{"))
+    .map((message) => JSON.parse(message))
+    .find((entry) => entry.stage === "prisma.request_started");
+
+  assert.equal(result.status, 200);
+  assert.equal(calls.form.get("audio_file").name, "voice-recording.m4a");
+  assert.equal(calls.form.get("audio_file").type, "audio/mp4");
+  assert.equal(transcriptionRequestLog.mimeType, "audio/mp4");
+  assert.equal(calls.delete, 1);
 });
 
 test("returns a successful English transcript and accepts an empty transcript response", async (t) => {
@@ -317,6 +343,27 @@ test("deletes the owner recording when the provider rejects the API key", async 
   assert.equal(calls.delete, 1);
   assert.equal(JSON.stringify(result).includes("test-gnani-key"), false);
   assert.equal(JSON.stringify(result).includes("sensitive provider detail"), false);
+});
+
+test("records Gnani 415 status and safe error type without logging provider response details", async () => {
+  const calls = setupVoiceFetch({
+    gnaniStatus: 415,
+    gnaniResult: {
+      success: false,
+      error: { type: "UNSUPPORTED_MEDIA_TYPE", message: "private provider detail" },
+    },
+  });
+  const result = await callHandler(requestBody());
+  const upstreamError = result.errors
+    .map((entry) => JSON.parse(entry))
+    .find((entry) => entry.stage === "prisma.response_rejected");
+
+  assert.equal(result.status, 502);
+  assert.equal(upstreamError.httpStatus, 415);
+  assert.equal(upstreamError.upstreamErrorType, "UNSUPPORTED_MEDIA_TYPE");
+  assert.equal(JSON.stringify(result.logs).includes("private provider detail"), false);
+  assert.equal(JSON.stringify(result.errors).includes("private provider detail"), false);
+  assert.equal(calls.delete, 1);
 });
 
 test("cleans up after missing credentials and provider timeout", async (t) => {

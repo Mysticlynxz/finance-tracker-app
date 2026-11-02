@@ -38,6 +38,14 @@ const getSafeEndpoint = (): string => {
   }
 };
 
+const getUriFileExtension = (uri: string): string => {
+  const uriPath = uri.split(/[?#]/, 1)[0];
+  const filename = uriPath.slice(uriPath.lastIndexOf("/") + 1);
+  return filename.includes(".")
+    ? filename.split(".").pop()?.toLowerCase() ?? "unknown"
+    : "unknown";
+};
+
 const getSafeResponseDetails = (response: string): Record<string, unknown> => {
   const text = redactDiagnosticText(response).slice(0, 1000);
   try {
@@ -61,7 +69,11 @@ const getSafeResponseDetails = (response: string): Record<string, unknown> => {
   }
 };
 
-const logVoiceUploadFailure = (stage: string, error: unknown): void => {
+const logVoiceUploadFailure = (
+  stage: string,
+  error: unknown,
+  metadata: Record<string, unknown> = {}
+): void => {
   const errorRecord =
     error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
   const response =
@@ -78,6 +90,7 @@ const logVoiceUploadFailure = (stage: string, error: unknown): void => {
 
   console.error("[Voice Upload] Voice upload pipeline failed", {
     stage,
+    ...metadata,
     failureKind: status === undefined ? "no_http_response" : "appwrite_http_rejection",
     endpoint: getSafeEndpoint(),
     projectId: APPWRITE_PROJECT_ID,
@@ -161,6 +174,19 @@ export const uploadVoiceRecording = async (audioUri: string): Promise<string> =>
 
   const nativeStorage = new ReactNativeStorage(nativeClient);
   const fileName = `voice-${ID.unique()}.m4a`;
+  const mimeType = "audio/mp4";
+  const recordingFormatConfigured =
+    Platform.OS === "android"
+      ? "MPEG-4 container with AAC audio (configured)"
+      : "MPEG-4 AAC audio (configured)";
+  const uploadMetadata = {
+    fileName,
+    recordingUriExtension: getUriFileExtension(audioFile.uri),
+    mimeType,
+    sizeBytes: fileSize,
+    recordingFormatConfigured,
+  };
+  console.info("[Voice Upload] Uploading audio recording", uploadMetadata);
   let uploadedFile;
   try {
     uploadedFile = await nativeStorage.createFile({
@@ -168,7 +194,7 @@ export const uploadVoiceRecording = async (audioUri: string): Promise<string> =>
       fileId: ID.unique(),
       file: {
         name: fileName,
-        type: "audio/mp4",
+        type: mimeType,
         size: fileSize,
         uri: audioFile.uri,
       },
@@ -178,10 +204,14 @@ export const uploadVoiceRecording = async (audioUri: string): Promise<string> =>
       ],
     });
   } catch (error) {
-    logVoiceUploadFailure("storage.createFile", error);
+    logVoiceUploadFailure("storage.createFile", error, uploadMetadata);
     throw error;
   }
 
+  console.info("[Voice Upload] Audio recording uploaded", {
+    ...uploadMetadata,
+    appwriteMimeType: uploadedFile.mimeType,
+  });
   return uploadedFile.$id;
 };
 
