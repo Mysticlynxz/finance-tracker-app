@@ -39,6 +39,7 @@ const createFile = (overrides = {}) => ({
 const callHandler = async (body, overrides = {}) => {
   let response;
   const logs = [];
+  const errors = [];
   const req = {
     method: "POST",
     headers: {
@@ -63,11 +64,11 @@ const callHandler = async (body, overrides = {}) => {
       logs.push(message);
     },
     error(message) {
-      logs.push(message);
+      errors.push(message);
     },
   });
 
-  return { ...response, logs };
+  return { ...response, logs, errors };
 };
 
 const setupVoiceFetch = ({
@@ -82,6 +83,7 @@ const setupVoiceFetch = ({
     detected_language_code: "ml-IN",
   },
   gnaniError,
+  deleteError,
 } = {}) => {
   const calls = { delete: 0, gnani: 0, downloaded: 0, form: null };
   globalThis.fetch = async (input, options = {}) => {
@@ -96,6 +98,9 @@ const setupVoiceFetch = ({
     }
     if (url.endsWith(`/files/${fileId}`) && options.method === "DELETE") {
       calls.delete += 1;
+      if (deleteError) {
+        throw deleteError;
+      }
       return Response.json({});
     }
     if (url.endsWith(`/files/${fileId}`)) {
@@ -142,6 +147,18 @@ test("transcribes Malayalam audio with the documented multipart request and owne
   assert.equal(calls.form.get("audio_file").name, "voice-recording.m4a");
   assert.equal(calls.apiKeyHeader, "test-gnani-key");
   assert.equal(calls.contentTypeHeader, undefined);
+  const loggedStages = result.logs
+    .filter((message) => message.startsWith("{"))
+    .map((message) => JSON.parse(message).stage);
+  assert.deepEqual(result.errors, []);
+  assert.ok(loggedStages.includes("authentication.headers_received"));
+  assert.ok(loggedStages.includes("storage.permissions_checked"));
+  assert.ok(loggedStages.includes("storage.download_completed"));
+  assert.ok(loggedStages.includes("prisma.request_started"));
+  assert.ok(loggedStages.includes("prisma.response_received"));
+  assert.ok(loggedStages.includes("storage.cleanup_completed"));
+  assert.equal(JSON.stringify(result.logs).includes("test-user-jwt"), false);
+  assert.equal(JSON.stringify(result.logs).includes("test-gnani-key"), false);
   assert.deepEqual(
     Buffer.from(await calls.form.get("audio_file").arrayBuffer()),
     audioBytes
@@ -197,6 +214,25 @@ test("does not retrieve or delete a file whose individual permissions are not ow
   assert.equal(result.status, 403);
   assert.equal(calls.downloaded, 0);
   assert.equal(calls.gnani, 0);
+  assert.equal(calls.delete, 0);
+});
+
+test("logs missing owner DELETE permission without exposing user identity", async () => {
+  const calls = setupVoiceFetch({
+    file: createFile({ $permissions: [`read("user:${userId}")`] }),
+  });
+  const result = await callHandler(requestBody());
+  const permissionError = result.errors
+    .map((entry) => JSON.parse(entry))
+    .find((entry) => entry.stage === "storage.ownership_validation_failed");
+
+  assert.equal(result.status, 403);
+  assert.equal(permissionError.hasOwnerRead, true);
+  assert.equal(permissionError.hasOwnerDelete, false);
+  assert.equal(permissionError.permissionCount, 1);
+  assert.equal(JSON.stringify(result.logs).includes(userId), false);
+  assert.equal(JSON.stringify(result.errors).includes(userId), false);
+  assert.equal(calls.downloaded, 0);
   assert.equal(calls.delete, 0);
 });
 
@@ -303,6 +339,46 @@ test("cleans up after missing credentials and provider timeout", async (t) => {
     assert.equal(result.status, 504);
     assert.equal(calls.delete, 1);
   });
+});
+
+test("logs cleanup denial while preserving the original transcription failure", async () => {
+  const calls = setupVoiceFetch({
+    gnaniStatus: 401,
+    gnaniResult: { success: false },
+    deleteError: Object.assign(new Error("No permissions provided for action 'delete'"), {
+      code: 403,
+      type: "user_unauthorized",
+    }),
+  });
+  const result = await callHandler(requestBody());
+  const cleanupError = result.errors
+    .map((entry) => JSON.parse(entry))
+    .find((entry) => entry.stage === "storage.cleanup_failed");
+
+  assert.equal(result.status, 502);
+  assert.equal(result.payload.error, "Unable to transcribe this recording. Please retry.");
+  assert.equal(cleanupError.httpStatus, 403);
+  assert.equal(cleanupError.appwriteErrorType, "user_unauthorized");
+  assert.equal(calls.delete, 1);
+});
+
+test("returns a cleanup failure when transcription succeeded but deletion failed", async () => {
+  const calls = setupVoiceFetch({
+    deleteError: Object.assign(new Error("No permissions provided for action 'delete'"), {
+      code: 403,
+      type: "user_unauthorized",
+    }),
+  });
+  const result = await callHandler(requestBody());
+  const cleanupError = result.errors
+    .map((entry) => JSON.parse(entry))
+    .find((entry) => entry.stage === "storage.cleanup_failed");
+
+  assert.equal(result.status, 500);
+  assert.equal(result.payload.error, "Unable to securely finish processing the recording.");
+  assert.equal(cleanupError.httpStatus, 403);
+  assert.equal(cleanupError.appwriteErrorType, "user_unauthorized");
+  assert.equal(calls.delete, 1);
 });
 
 test("extracts a transaction date and preserves the exact original transcript", async () => {

@@ -1,7 +1,5 @@
 import { Account, Client, Databases, Permission, Query, Role, Storage } from "appwrite";
 
-console.log("Function started");
-
 const AI_ADVISOR_FALLBACK =
   "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
 const UNAUTHENTICATED_FALLBACK = "User not authenticated. Please log in again.";
@@ -360,18 +358,50 @@ Rules:
 const isValidVoiceFileId = (fileId) =>
   typeof fileId === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/.test(fileId);
 
-const hasExpectedVoicePermissions = (permissions, userId) => {
-  if (!Array.isArray(permissions)) {
-    return false;
+const getVoicePermissionStatus = (permissions, userId) => {
+  const ownerRead = Permission.read(Role.user(userId));
+  const ownerDelete = Permission.delete(Role.user(userId));
+  const expected = [ownerRead, ownerDelete].sort();
+  const actual = Array.isArray(permissions) ? permissions : [];
+
+  return {
+    permissionCount: actual.length,
+    hasOwnerRead: actual.includes(ownerRead),
+    hasOwnerDelete: actual.includes(ownerDelete),
+    matchesExpected: actual.length === expected.length &&
+      [...actual].sort().every((permission, index) => permission === expected[index]),
+  };
+};
+
+const logVoiceStage = (log, stage, details = {}) => {
+  log(JSON.stringify({ event: "voice_transcription", stage, ...details }));
+};
+
+const getSafeVoiceErrorDetails = (cause) => {
+  const details = {};
+  if (typeof cause?.name === "string") {
+    details.errorName = cause.name;
   }
+  if (typeof cause?.code === "number") {
+    details.httpStatus = cause.code;
+  } else if (typeof cause?.status === "number") {
+    details.httpStatus = cause.status;
+  }
+  if (typeof cause?.type === "string") {
+    details.appwriteErrorType = cause.type;
+  }
+  return details;
+};
 
-  const expected = [
-    Permission.read(Role.user(userId)),
-    Permission.delete(Role.user(userId)),
-  ].sort();
-
-  return permissions.length === expected.length &&
-    [...permissions].sort().every((permission, index) => permission === expected[index]);
+const logVoiceFailure = (error, stage, cause, details = {}) => {
+  error(
+    JSON.stringify({
+      event: "voice_transcription",
+      stage,
+      ...getSafeVoiceErrorDetails(cause),
+      ...details,
+    })
+  );
 };
 
 const isSupportedVoiceFile = (file) => {
@@ -408,6 +438,8 @@ export const requestGnaniTranscription = async ({
   fileName,
   mimeType,
   apiKey,
+  log,
+  error,
 }) => {
   const form = new FormData();
   form.append("audio_file", new Blob([audio], { type: mimeType }), fileName);
@@ -415,26 +447,46 @@ export const requestGnaniTranscription = async ({
   form.append("language_code", "indic-auto");
   form.append("format", "transcribe");
 
-  const response = await fetch(GNANI_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "X-API-Key-ID": apiKey,
-    },
-    body: form,
-    signal: AbortSignal.timeout(16_000),
-  });
+  logVoiceStage(log, "prisma.request_started");
+  let response;
+  try {
+    response = await fetch(GNANI_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "X-API-Key-ID": apiKey,
+      },
+      body: form,
+      signal: AbortSignal.timeout(16_000),
+    });
+  } catch (cause) {
+    logVoiceFailure(error, "prisma.request_failed", cause);
+    throw cause;
+  }
 
   let result;
   try {
     result = await response.json();
   } catch {
+    logVoiceFailure(error, "prisma.invalid_json_response", undefined, {
+      httpStatus: response.status,
+    });
     throw new Error("Gnani returned an invalid response.");
   }
 
   if (!response.ok || result?.success !== true || typeof result.transcript !== "string") {
+    logVoiceFailure(error, "prisma.response_rejected", undefined, {
+      httpStatus: response.status,
+      success: result?.success === true,
+      transcriptIsString: typeof result?.transcript === "string",
+    });
     throw new Error("Gnani transcription request failed.");
   }
 
+  logVoiceStage(log, "prisma.response_received", {
+    httpStatus: response.status,
+    transcriptIsEmpty: result.transcript.trim().length === 0,
+    detectedLanguagePresent: typeof result.detected_language_code === "string",
+  });
   return {
     transcript: result.transcript.trim(),
     ...(typeof result.detected_language_code === "string"
@@ -443,18 +495,28 @@ export const requestGnaniTranscription = async ({
   };
 };
 
-const getVoiceTranscriptionResponse = async ({ req, body, log }) => {
+const getVoiceTranscriptionResponse = async ({ req, body, log, error }) => {
   if (req?.method !== "POST") {
+    logVoiceStage(log, "request.rejected", { reason: "method_not_allowed" });
     return { status: 405, payload: { error: "POST is required." } };
   }
 
   if (!/^application\/json(?:\s*;|$)/i.test(getHeader(req, "content-type").trim())) {
+    logVoiceStage(log, "request.rejected", { reason: "invalid_content_type" });
     return { status: 415, payload: { error: "A JSON request body is required." } };
   }
 
   const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
   const userId = getHeader(req, "x-appwrite-user-id").trim();
+  logVoiceStage(log, "authentication.headers_received", {
+    jwtPresent: Boolean(jwt),
+    userIdPresent: Boolean(userId),
+  });
   if (!jwt || !userId) {
+    logVoiceFailure(error, "authentication.headers_missing", undefined, {
+      jwtPresent: Boolean(jwt),
+      userIdPresent: Boolean(userId),
+    });
     return { status: 401, payload: { error: "Authentication is required." } };
   }
 
@@ -465,34 +527,59 @@ const getVoiceTranscriptionResponse = async ({ req, body, log }) => {
     typeof bucketId !== "string" ||
     bucketId !== VOICE_RECORDINGS_BUCKET_ID
   ) {
+    logVoiceStage(log, "request.rejected", {
+      fileIdValid: isValidVoiceFileId(fileId),
+      bucketMatches: bucketId === VOICE_RECORDINGS_BUCKET_ID,
+    });
     return { status: 400, payload: { error: "A valid recording and bucket are required." } };
   }
 
   let client;
-  let storage;
-  let file;
   try {
     client = createAppwriteClient(req);
     if (!client) {
+      logVoiceFailure(error, "authentication.jwt_missing");
       return { status: 401, payload: { error: "Authentication is required." } };
     }
 
-    const account = new Account(client);
-    const authenticatedUser = await account.get();
-    if (authenticatedUser.$id !== userId) {
+    const authenticatedUser = await new Account(client).get();
+    const identityMatches = authenticatedUser.$id === userId;
+    logVoiceStage(log, "authentication.user_verified", { identityMatches });
+    if (!identityMatches) {
+      logVoiceFailure(error, "authentication.identity_mismatch");
       return { status: 401, payload: { error: "Authentication is invalid." } };
     }
-
-    storage = new Storage(client);
-    file = await storage.getFile({ bucketId: VOICE_RECORDINGS_BUCKET_ID, fileId });
-  } catch {
+  } catch (cause) {
+    logVoiceFailure(error, "authentication.jwt_validation_failed", cause);
     return { status: 403, payload: { error: "Recording is unavailable or access was denied." } };
   }
 
-  if (
-    file.bucketId !== VOICE_RECORDINGS_BUCKET_ID ||
-    !hasExpectedVoicePermissions(file.$permissions, userId)
-  ) {
+  const storage = new Storage(client);
+  let file;
+  try {
+    logVoiceStage(log, "storage.metadata_fetch_started");
+    file = await storage.getFile({ bucketId: VOICE_RECORDINGS_BUCKET_ID, fileId });
+    logVoiceStage(log, "storage.metadata_received", {
+      fileFound: true,
+      bucketMatches: file.bucketId === VOICE_RECORDINGS_BUCKET_ID,
+      fileSizeValid: Number.isSafeInteger(file.sizeOriginal) && file.sizeOriginal > 0,
+      mimeTypePresent: typeof file.mimeType === "string",
+    });
+  } catch (cause) {
+    logVoiceFailure(error, "storage.metadata_fetch_failed", cause);
+    return { status: 403, payload: { error: "Recording is unavailable or access was denied." } };
+  }
+
+  const permissionStatus = getVoicePermissionStatus(file.$permissions, userId);
+  logVoiceStage(log, "storage.permissions_checked", {
+    bucketMatches: file.bucketId === VOICE_RECORDINGS_BUCKET_ID,
+    ...permissionStatus,
+  });
+  if (file.bucketId !== VOICE_RECORDINGS_BUCKET_ID || !permissionStatus.matchesExpected) {
+    logVoiceFailure(error, "storage.ownership_validation_failed", undefined, {
+      bucketMatches: file.bucketId === VOICE_RECORDINGS_BUCKET_ID,
+      ...permissionStatus,
+    });
     return { status: 403, payload: { error: "Recording ownership could not be verified." } };
   }
 
@@ -519,6 +606,7 @@ const getVoiceTranscriptionResponse = async ({ req, body, log }) => {
       throw new Error("Transcription is temporarily unavailable.");
     }
 
+    logVoiceStage(log, "storage.download_started");
     const downloadUrl = storage.getFileDownload({
       bucketId: VOICE_RECORDINGS_BUCKET_ID,
       fileId,
@@ -532,10 +620,17 @@ const getVoiceTranscriptionResponse = async ({ req, body, log }) => {
     });
     if (!downloadResponse.ok) {
       status = 502;
+      logVoiceFailure(error, "storage.download_failed", undefined, {
+        httpStatus: downloadResponse.status,
+      });
       throw new Error("Unable to retrieve the recording.");
     }
 
     const audio = Buffer.from(await downloadResponse.arrayBuffer());
+    logVoiceStage(log, "storage.download_completed", {
+      downloadedSizeValid: audio.length === file.sizeOriginal,
+      sizeWithinLimit: audio.length <= MAX_VOICE_RECORDING_BYTES,
+    });
     if (audio.length !== file.sizeOriginal || audio.length > MAX_VOICE_RECORDING_BYTES) {
       status = 400;
       throw new Error("Recording contents did not match the uploaded file.");
@@ -551,10 +646,14 @@ const getVoiceTranscriptionResponse = async ({ req, body, log }) => {
       fileName: `voice-recording.${file.name.toLowerCase().split(".").pop()}`,
       mimeType: file.mimeType,
       apiKey,
+      log,
+      error,
     });
     payload = transcription;
   } catch (transcriptionError) {
-    log("Voice transcription request failed.");
+    logVoiceFailure(error, "transcription.processing_failed", transcriptionError, {
+      responseStatus: status,
+    });
     if (status === 200) {
       status = transcriptionError?.name === "TimeoutError" ? 504 : 502;
     }
@@ -568,9 +667,13 @@ const getVoiceTranscriptionResponse = async ({ req, body, log }) => {
     };
   } finally {
     try {
+      logVoiceStage(log, "storage.cleanup_started");
       await storage.deleteFile({ bucketId: VOICE_RECORDINGS_BUCKET_ID, fileId });
-    } catch {
-      log("Temporary voice recording cleanup failed.");
+      logVoiceStage(log, "storage.cleanup_completed");
+    } catch (cleanupError) {
+      logVoiceFailure(error, "storage.cleanup_failed", cleanupError, {
+        transcriptionStatus: status,
+      });
       if (status === 200) {
         status = 500;
         payload = { error: "Unable to securely finish processing the recording." };
@@ -669,7 +772,7 @@ export default async ({ req, res, log, error }) => {
         : "advisor";
 
     if (mode === "transcribe-voice") {
-      const result = await getVoiceTranscriptionResponse({ req, body, log });
+      const result = await getVoiceTranscriptionResponse({ req, body, log, error });
       return res.json(result.payload, result.status);
     }
 
@@ -733,7 +836,18 @@ export default async ({ req, res, log, error }) => {
     });
 
     return res.json({ reply });
-  } catch {
+  } catch (cause) {
+    if (typeof body.mode === "string" && body.mode.trim().toLowerCase() === "transcribe-voice") {
+      error(
+        JSON.stringify({
+          event: "voice_transcription",
+          stage: "request.unhandled_failure",
+          ...getSafeVoiceErrorDetails(cause),
+        })
+      );
+      return res.json({ error: "Unable to transcribe this recording. Please retry." }, 500);
+    }
+
     error("AI request failed.");
     return res.json({ reply: AI_ADVISOR_FALLBACK });
   }
