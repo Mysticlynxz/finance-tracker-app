@@ -1,7 +1,8 @@
 import { ID, Models, Permission, Query, Role } from "appwrite";
 import { APPWRITE_DATABASE_ID, databases, getCurrentUser, getErrorMessage } from "./appwrite";
 
-const APPWRITE_CATEGORIES_COLLECTION_ID = "categories";
+const APPWRITE_CATEGORIES_COLLECTION_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_CATEGORIES_COLLECTION_ID?.trim() || "categories";
 
 export interface CategoryDocument extends Models.Document {
   name: string;

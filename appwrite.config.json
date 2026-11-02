@@ -1,0 +1,38 @@
+{
+    "organizationId": "699e0ec2003287ca99fe",
+    "projectId": "69a4662b001f58493387",
+    "projectName": "Finance Tracker",
+    "endpoint": "https://fra.cloud.appwrite.io/v1",
+    "functions": [
+        {
+            "$id": "69a76eab00275ef10835",
+            "name": "ai-advisor",
+            "runtime": "node-22",
+            "path": "functions/ai-advisor",
+            "previewDomainTarget": "region",
+            "previewDomainLabel": "69a76eac000d3d93e5d1",
+            "entrypoint": "index.js",
+            "execute": [
+                "users"
+            ],
+            "enabled": true,
+            "logging": true,
+            "events": [],
+            "schedule": "",
+            "interval": 0,
+            "timeout": 30,
+            "commands": "npm install",
+            "scopes": [],
+            "installationId": "69a9a78165edda4beaa2",
+            "providerRepositoryId": "1171032706",
+            "providerBranch": "main",
+            "providerSilentMode": false,
+            "providerRootDirectory": "/functions/ai-advisor",
+            "providerBranches": [],
+            "providerPaths": [],
+            "buildSpecification": "s-2vcpu-2gb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
+        }
+    ]
+}

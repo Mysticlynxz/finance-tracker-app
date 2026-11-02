@@ -19,8 +19,6 @@
     "android": {
       "package": "com.spendwise.app",
       "permissions": [
-        "RECORD_AUDIO",
-        "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
       "adaptiveIcon": {
@@ -39,7 +37,7 @@
       [
         "expo-av",
         {
-          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone."
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use your microphone to record voice expenses."
         }
       ],
       [

@@ -3,8 +3,6 @@ import { requestExpenseExtractionReply as requestExpenseExtractionReplyFromAppwr
 import { getCategories } from "./categoryService";
 
 export const OTHER_CATEGORY_NAME = "Other";
-const GEMINI_MODEL = "gemini-3-flash-preview";
-const GEMINI_GENERATE_CONTENT_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const EXTRACTION_FALLBACK = {
   category: OTHER_CATEGORY_NAME,
@@ -12,134 +10,6 @@ const EXTRACTION_FALLBACK = {
 } as const;
 
 const EMPTY_EXPENSES_REPLY = "[]";
-
-interface GeminiContentPart {
-  text?: string;
-}
-
-interface GeminiCandidate {
-  content?: {
-    parts?: GeminiContentPart[];
-  };
-}
-
-interface GeminiGenerateContentResponse {
-  candidates?: GeminiCandidate[];
-  error?: {
-    message?: string;
-  };
-}
-
-const getGeminiApiKey = () =>
-  process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim() || "";
-
-const buildGeminiExpensePrompt = (transcribedText: string) => `Extract ALL expenses from the following sentence.
-
-Return ONLY valid JSON array.
-
-Each item must have:
-- amount (number)
-- category (string)
-
-Example:
-Input: I spent 200 on food and 500 on travel
-
-Output:
-[
-  { "amount": 200, "category": "Food" },
-  { "amount": 500, "category": "Travel" }
-]
-
-If category is unclear, use "Other".
-
-Now process:
-${transcribedText}`;
-
-const parseGeminiResponse = async (
-  response: Response
-): Promise<GeminiGenerateContentResponse> => {
-  const responseText = await response.text();
-
-  if (!responseText.trim()) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(responseText) as GeminiGenerateContentResponse;
-  } catch {
-    throw new Error(
-      responseText.trim() || `Gemini returned an invalid response with status ${response.status}.`
-    );
-  }
-};
-
-const extractReplyTextFromGemini = (data: GeminiGenerateContentResponse) =>
-  data.candidates?.[0]?.content?.parts
-    ?.map((part) => part.text?.trim() || "")
-    .join("")
-    .trim() || "";
-
-const requestGeminiExpenseExtractionReply = async (
-  transcribedText: string
-): Promise<string> => {
-  const apiKey = getGeminiApiKey();
-
-  if (!apiKey) {
-    throw new Error("Missing EXPO_PUBLIC_GEMINI_API_KEY.");
-  }
-
-  const response = await fetch(`${GEMINI_GENERATE_CONTENT_URL}?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            {
-              text: buildGeminiExpensePrompt(transcribedText),
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        response_mime_type: "application/json",
-        response_schema: {
-          type: "ARRAY",
-          items: {
-            type: "OBJECT",
-            properties: {
-              category: {
-                type: "STRING",
-              },
-              amount: {
-                type: "NUMBER",
-              },
-            },
-            required: ["category", "amount"],
-          },
-        },
-      },
-    }),
-  });
-
-  const data = await parseGeminiResponse(response);
-
-  if (!response.ok) {
-    throw new Error(
-      data.error?.message?.trim() || response.statusText || "Gemini expense extraction failed."
-    );
-  }
-
-  const reply = extractReplyTextFromGemini(data);
-
-  if (!reply) {
-    throw new Error("Gemini returned an empty reply.");
-  }
-
-  return reply;
-};
 
 const canonicalizeCategoryName = (category: string) => {
   const trimmedCategory = category.trim();
@@ -168,6 +38,17 @@ const normalizeParsedExpenses = (parsed: unknown): Record<string, unknown>[] => 
   }
 
   return [];
+};
+
+const normalizeExpenseDate = (value: unknown): string | null => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const parsedDate = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value
+    ? value
+    : null;
 };
 
 export const buildValidExpenseCategories = (userCategories: string[] = []) => {
@@ -226,6 +107,7 @@ export const loadValidExpenseCategories = async (): Promise<string[]> => {
 export interface ExtractedExpense {
   amount: number;
   category: string;
+  date: string | null;
   rawCategory: string;
   parsed: Record<string, unknown>;
 }
@@ -247,15 +129,9 @@ export const extractExpenseFromUserText = async (
       ? buildValidExpenseCategories(categories)
       : await loadValidExpenseCategories();
 
-  console.log("User text:", trimmedUserText);
-
   if (!trimmedUserText) {
     const reply = EMPTY_EXPENSES_REPLY;
     const parsed: Record<string, unknown>[] = [];
-
-    console.log("Gemini raw:", reply);
-    console.log("Parsed:", parsed);
-    console.log("Final:", []);
 
     return {
       expenses: [],
@@ -265,20 +141,10 @@ export const extractExpenseFromUserText = async (
     };
   }
 
-  let reply = JSON.stringify(EXTRACTION_FALLBACK);
-  try {
-    reply = await requestGeminiExpenseExtractionReply(trimmedUserText);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Gemini expense extraction failed.";
-    console.error("[Expense Extraction] Gemini request failed:", errorMessage);
-
-    reply = await requestExpenseExtractionReplyFromAppwrite({
-      message: trimmedUserText,
-      validCategories,
-    });
-  }
-
-  console.log("Gemini raw:", reply);
+  const reply = await requestExpenseExtractionReplyFromAppwrite({
+    message: trimmedUserText,
+    validCategories,
+  });
 
   let parsed: unknown;
 
@@ -287,8 +153,6 @@ export const extractExpenseFromUserText = async (
   } catch {
     parsed = [];
   }
-
-  console.log("Parsed:", parsed);
 
   const expenses = normalizeParsedExpenses(parsed).map((expense) => {
     const rawCategory =
@@ -301,18 +165,11 @@ export const extractExpenseFromUserText = async (
     return {
       amount,
       category: matchedCategory,
+      date: normalizeExpenseDate(expense.date),
       rawCategory,
       parsed: expense,
     };
   });
-
-  console.log(
-    "Final:",
-    expenses.map(({ category, amount }) => ({
-      matchedCategory: category,
-      amount,
-    }))
-  );
 
   return {
     expenses,

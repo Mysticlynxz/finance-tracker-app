@@ -1,4 +1,5 @@
 import { Audio } from "expo-av";
+import { Platform } from "react-native";
 import { useEffect, useRef, useState } from "react";
 
 export function useAudioRecorder() {
@@ -22,39 +23,40 @@ export function useAudioRecorder() {
         void activeRecording.stopAndUnloadAsync().catch(() => undefined);
       }
 
-      void Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-      }).catch(() => undefined);
+      if (Platform.OS !== "web") {
+        void Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+        }).catch(() => undefined);
+      }
     };
   }, []);
 
   const startRecording = async () => {
-    console.log("[AudioRecorder] startRecording called");
+    if (Platform.OS === "web") {
+      throw new Error("Voice expense capture is supported in the SpendWise mobile app.");
+    }
 
     if (isStoppingRef.current) {
-      console.log("[AudioRecorder] Ignoring start; stop is in progress");
-      return;
+      throw new Error("Please wait for the current recording to finish.");
     }
 
     if (recordingRef.current) {
-      console.log("[AudioRecorder] Ignoring start; recording already exists");
-      return;
+      throw new Error("A recording is already in progress.");
     }
 
     if (startPromiseRef.current) {
-      console.log("[AudioRecorder] Waiting for existing start operation");
       await startPromiseRef.current;
       return;
     }
 
     const startPromise = (async () => {
+      let newRecording: Audio.Recording | null = null;
       try {
         const permission = await Audio.requestPermissionsAsync();
-        console.log("[AudioRecorder] Microphone permission:", permission.status);
-
-        if (permission.status !== "granted") {
-          console.log("Microphone permission was not granted.");
-          return;
+        if (!permission.granted) {
+          throw new Error(
+            "Microphone permission is required to record an expense. Allow microphone access in your device settings and try again."
+          );
         }
 
         await Audio.setAudioModeAsync({
@@ -62,7 +64,7 @@ export function useAudioRecorder() {
           playsInSilentModeIOS: true,
         });
 
-        const newRecording = new Audio.Recording();
+        newRecording = new Audio.Recording();
         await newRecording.prepareToRecordAsync({
           android: {
             extension: ".m4a",
@@ -83,39 +85,41 @@ export function useAudioRecorder() {
             linearPCMIsBigEndian: false,
             linearPCMIsFloat: false,
           },
-          web: {
-            mimeType: "audio/webm",
-            bitsPerSecond: 128000,
-          },
+          web: {},
           isMeteringEnabled: false,
         });
         await newRecording.startAsync();
-
-        const status = await newRecording.getStatusAsync();
-        console.log("[AudioRecorder] Recording started. canRecord:", status.canRecord);
 
         recordingStartedAtRef.current = Date.now();
         recordingRef.current = newRecording;
         setAudioUri(null);
         setRecording(newRecording);
       } catch (error) {
+        if (newRecording) {
+          await newRecording.stopAndUnloadAsync().catch(() => undefined);
+        }
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
         }).catch(() => undefined);
-        console.error("[AudioRecorder] Failed to start recording.", error);
+        throw error instanceof Error
+          ? new Error(`Unable to start recording: ${error.message}`)
+          : new Error("Unable to start recording. Check microphone permission and try again.");
       }
     })();
 
     startPromiseRef.current = startPromise;
-    await startPromise;
-    startPromiseRef.current = null;
+    try {
+      await startPromise;
+    } finally {
+      if (startPromiseRef.current === startPromise) {
+        startPromiseRef.current = null;
+      }
+    }
   };
 
   const stopRecording = async (): Promise<string | null> => {
-    console.log("[AudioRecorder] stopRecording called");
-
     if (isStoppingRef.current) {
-      console.log("[AudioRecorder] Ignoring stop; already stopping");
       return null;
     }
 
@@ -124,14 +128,12 @@ export function useAudioRecorder() {
 
     try {
       if (!recordingRef.current && startPromiseRef.current) {
-        console.log("[AudioRecorder] Waiting for start to complete before stop");
-        await startPromiseRef.current;
+        await startPromiseRef.current.catch(() => undefined);
       }
 
       activeRecording = recordingRef.current;
 
       if (!activeRecording) {
-        console.log("[AudioRecorder] No active recording to stop");
         return null;
       }
 
@@ -140,29 +142,22 @@ export function useAudioRecorder() {
         const elapsed = Date.now() - startedAt;
         if (elapsed < MIN_RECORDING_MS) {
           const waitMs = MIN_RECORDING_MS - elapsed;
-          console.log(`[AudioRecorder] Waiting ${waitMs}ms to avoid empty audio`);
           await new Promise((resolve) => setTimeout(resolve, waitMs));
         }
       }
 
-      const statusBeforeStop = await activeRecording.getStatusAsync();
-      console.log("[AudioRecorder] Status before stop:", statusBeforeStop);
-
       try {
         await activeRecording.stopAndUnloadAsync();
-      } catch (stopError) {
-        console.error("[AudioRecorder] First stop attempt failed:", stopError);
+      } catch {
         await new Promise((resolve) => setTimeout(resolve, 250));
         await activeRecording.stopAndUnloadAsync();
       }
-      console.log("[AudioRecorder] stopAndUnloadAsync completed");
 
       const statusAfterStop = await activeRecording.getStatusAsync();
-      console.log("[AudioRecorder] Status after stop:", statusAfterStop);
-
-      // IMPORTANT: read URI before clearing recording references.
       const uri = activeRecording.getURI() ?? ("uri" in statusAfterStop ? statusAfterStop.uri ?? null : null);
-      console.log("[AudioRecorder] URI from recording:", uri);
+      if (!uri) {
+        throw new Error("The recording finished, but no audio file was created.");
+      }
 
       recordingRef.current = null;
       recordingStartedAtRef.current = null;
@@ -171,18 +166,14 @@ export function useAudioRecorder() {
 
       return uri ?? null;
     } catch (error) {
-      console.error("[AudioRecorder] Failed to stop recording.", error);
       if (activeRecording) {
-        const fallbackUri = activeRecording.getURI();
-        console.log("[AudioRecorder] Fallback URI after stop failure:", fallbackUri);
-        if (fallbackUri) {
-          recordingRef.current = null;
-          setRecording(null);
-          setAudioUri(fallbackUri);
-          return fallbackUri;
-        }
+        await activeRecording.stopAndUnloadAsync().catch(() => undefined);
       }
-      return null;
+      recordingRef.current = null;
+      setRecording(null);
+      throw error instanceof Error
+        ? new Error(`Unable to finish recording: ${error.message}`)
+        : new Error("Unable to finish recording. Please try again.");
     } finally {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,

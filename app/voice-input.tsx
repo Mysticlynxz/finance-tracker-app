@@ -8,30 +8,70 @@ import {
   Animated,
   Modal,
   Pressable,
+  Platform,
   ScrollView,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
 import { createExpense } from "../lib/appwrite";
-import { transcribeAudioUriWithAssemblyAI } from "../lib/assemblyAi";
 import { extractExpenseFromUserText } from "../lib/expenseExtraction";
 import { useAudioRecorder } from "../lib/useAudioRecorder";
+import { transcribeAudioUri } from "../lib/voiceTranscription";
+
+const MAX_RECORDING_DURATION_MS = 30_000;
 
 interface DetectedExpense {
-  amount: number;
-  matchedCategory: string;
+  amount: string;
+  category: string;
+  date: string;
 }
 
+const getLocalDateInput = () => {
+  const date = new Date();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+};
+
+const isValidDateInput = (value: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+};
+
+const toExpenseTimestamp = (dateInput: string) => {
+  const [year, month, day] = dateInput.split("-").map(Number);
+  return new Date(year, month - 1, day, 12).toISOString();
+};
+
+const formatDuration = (seconds: number) =>
+  `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+
 export default function VoiceInputScreen() {
-  const { isDarkMode } = useContext(ExpenseContext);
+  const { isDarkMode, currency, convertToINR } = useContext(ExpenseContext);
   const { recording, startRecording, stopRecording } = useAudioRecorder();
   const [detectedExpenses, setDetectedExpenses] = useState<DetectedExpense[]>([]);
   const [isSavingExpense, setIsSavingExpense] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [processingError, setProcessingError] = useState("");
+  const [lastRecordingUri, setLastRecordingUri] = useState<string | null>(null);
+  const [recordingDurationSeconds, setRecordingDurationSeconds] = useState(0);
   const micScale = useRef(new Animated.Value(1)).current;
+  const maxDurationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const isProcessingRef = useRef(false);
+  const stoppedAtMaxDurationRef = useRef(false);
+  const isPressHeldRef = useRef(false);
 
   useEffect(() => {
     Animated.spring(micScale, {
@@ -48,45 +88,75 @@ export default function VoiceInputScreen() {
     }
   }, [recording]);
 
-  const sendToSpeechAPI = async (uri: string) => {
-    console.log("ENTERED API FUNCTION");
-    const transcribedText = await transcribeAudioUriWithAssemblyAI(uri);
+  useEffect(
+    () => () => {
+      if (maxDurationTimeoutRef.current) {
+        clearTimeout(maxDurationTimeoutRef.current);
+      }
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+      }
+    },
+    []
+  );
 
-    console.log("Transcribed text:", transcribedText);
+  const sendToSpeechAPI = async (uri: string) => {
+    const { transcript: transcribedText } = await transcribeAudioUri(uri);
+    setTranscript(transcribedText);
+    if (!transcribedText) {
+      throw new Error("No speech was detected. Record a clear 15–20 second clip and retry.");
+    }
 
     const { expenses } = await extractExpenseFromUserText(transcribedText);
     const validExpenses = expenses
       .filter((expense) => Number.isFinite(expense.amount) && expense.amount > 0)
-      .map(({ amount, category }) => ({
-        amount,
-        matchedCategory: category,
+      .map(({ amount, category, date }) => ({
+        amount: String(amount),
+        category,
+        date: date ?? getLocalDateInput(),
       }));
 
     if (validExpenses.length === 0) {
-      Alert.alert("No expenses found", "No valid expenses were detected in that recording.");
       setDetectedExpenses([]);
+      setProcessingError("No valid expense was detected. Retry or record the expense again.");
       return;
     }
 
     setDetectedExpenses(validExpenses);
+    setProcessingError("");
   };
 
   const handleConfirmExpense = async () => {
-    if (detectedExpenses.length === 0 || isSavingExpense) {
+    if (
+      detectedExpenses.length === 0 ||
+      isSavingExpense ||
+      detectedExpenses.some(
+        ({ amount, category, date }) =>
+          !Number.isFinite(Number(amount)) ||
+          Number(amount) <= 0 ||
+          !category.trim() ||
+          !isValidDateInput(date)
+      )
+    ) {
       return;
     }
 
     setIsSavingExpense(true);
 
     try {
-      for (const { amount, matchedCategory } of detectedExpenses) {
+      for (const { amount, category, date } of detectedExpenses) {
+        const amountInINR = convertToINR(Number(amount));
+        if (!Number.isFinite(amountInINR) || amountInINR <= 0) {
+          throw new Error("Expense amount could not be converted to INR.");
+        }
+
         await createExpense({
-          amount,
-          category: matchedCategory,
-          date: new Date().toISOString(),
+          amount: amountInINR,
+          category: category.trim(),
+          date: toExpenseTimestamp(date),
         });
 
-        console.log("Saved:", { amount, matchedCategory });
+        console.log("Saved voice expense:", { category: category.trim() });
       }
 
       setDetectedExpenses([]);
@@ -108,44 +178,121 @@ export default function VoiceInputScreen() {
   };
 
   const handleStop = async () => {
-    console.log("[VoiceInput] handleStop called");
-    setIsRecording(false);
-    setIsProcessing(true);
-
-    let uri: string | null = null;
-    try {
-      uri = await stopRecording();
-    } catch (error) {
-      console.error("[VoiceInput] stopRecording threw:", error);
-    }
-
-    console.log("[VoiceInput] stopRecording returned URI:", uri);
-
-    if (!uri) {
-      console.log("No audio URI found");
-      setIsProcessing(false);
+    if (isProcessingRef.current) {
       return;
     }
 
-    console.log("Recording complete:", uri);
+    isPressHeldRef.current = false;
+    isProcessingRef.current = true;
+    if (maxDurationTimeoutRef.current) {
+      clearTimeout(maxDurationTimeoutRef.current);
+      maxDurationTimeoutRef.current = null;
+    }
+    if (durationIntervalRef.current) {
+      clearInterval(durationIntervalRef.current);
+      durationIntervalRef.current = null;
+    }
+
+    setIsRecording(false);
+    setIsProcessing(true);
 
     try {
-      await sendToSpeechAPI(uri);
+      const uri = await stopRecording();
+      if (uri) {
+        setLastRecordingUri(uri);
+        await sendToSpeechAPI(uri);
+      } else {
+        setProcessingError("No recording was saved. Please try recording again.");
+      }
     } catch (error) {
-      console.error("Processing error:", error);
+      const message =
+        error instanceof Error ? error.message : "Unable to process the recording.";
+      setProcessingError(message);
+    } finally {
+      recordingStartedAtRef.current = null;
+      setIsProcessing(false);
+      isProcessingRef.current = false;
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!lastRecordingUri || isProcessingRef.current || isSavingExpense) {
+      return;
+    }
+
+    isProcessingRef.current = true;
+    setIsProcessing(true);
+    setProcessingError("");
+    try {
+      await sendToSpeechAPI(lastRecordingUri);
+    } catch (error) {
+      setProcessingError(
+        error instanceof Error ? error.message : "Unable to process the recording. Please retry."
+      );
     } finally {
       setIsProcessing(false);
+      isProcessingRef.current = false;
     }
   };
 
   const handlePressIn = async () => {
-    if (isProcessing || isSavingExpense) {
+    if (isProcessingRef.current || isSavingExpense) {
       return;
     }
 
+    stoppedAtMaxDurationRef.current = false;
+    setProcessingError("");
+    setTranscript("");
+    isPressHeldRef.current = true;
     setIsRecording(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-    await startRecording();
+    try {
+      await startRecording();
+      setLastRecordingUri(null);
+      if (isPressHeldRef.current) {
+        recordingStartedAtRef.current = Date.now();
+        setRecordingDurationSeconds(0);
+        durationIntervalRef.current = setInterval(() => {
+          if (recordingStartedAtRef.current !== null) {
+            setRecordingDurationSeconds(
+              Math.floor((Date.now() - recordingStartedAtRef.current) / 1000)
+            );
+          }
+        }, 1_000);
+        maxDurationTimeoutRef.current = setTimeout(() => {
+          stoppedAtMaxDurationRef.current = true;
+          void handleStop();
+        }, MAX_RECORDING_DURATION_MS);
+      } else {
+        void handleStop();
+      }
+    } catch (error) {
+      isPressHeldRef.current = false;
+      setIsRecording(false);
+      if (maxDurationTimeoutRef.current) {
+        clearTimeout(maxDurationTimeoutRef.current);
+        maxDurationTimeoutRef.current = null;
+      }
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = null;
+      }
+      const message =
+        error instanceof Error ? error.message : "Unable to start recording. Please try again.";
+      Alert.alert("Microphone unavailable", message);
+    }
+  };
+
+  const updateDetectedExpense = (
+    index: number,
+    field: keyof DetectedExpense,
+    value: string
+  ) => {
+    setDetectedExpenses((expenses) =>
+      expenses.map((expense, expenseIndex) =>
+        expenseIndex === index ? { ...expense, [field]: value } : expense
+      )
+    );
   };
 
   const colors = isDarkMode
@@ -166,8 +313,33 @@ export default function VoiceInputScreen() {
         accent: "#059669",
       };
 
-  const formatDetectedAmount = (amount: number) =>
-    Number.isInteger(amount) ? amount.toString() : amount.toFixed(2);
+  if (Platform.OS === "web") {
+    return (
+      <SafeAreaView className="flex-1" style={{ backgroundColor: colors.screen }}>
+        <View className="flex-1 items-center justify-center px-6">
+          <View
+            className="w-full max-w-md items-center rounded-[28px] border p-8"
+            style={{ backgroundColor: colors.card, borderColor: colors.border }}
+          >
+            <Ionicons name="phone-portrait-outline" size={40} color={colors.accent} />
+            <Text className="mt-5 text-center text-2xl font-extrabold" style={{ color: colors.primary }}>
+              Voice capture is mobile-only
+            </Text>
+            <Text className="mt-3 text-center text-base" style={{ color: colors.secondary }}>
+              Voice expense capture is supported in the SpendWise mobile app on Android and iOS.
+            </Text>
+            <Pressable
+              onPress={() => router.replace("/home")}
+              className="mt-6 items-center rounded-2xl px-6 py-4"
+              style={{ backgroundColor: colors.accent }}
+            >
+              <Text className="text-base font-semibold text-white">Back to home</Text>
+            </Pressable>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView className="flex-1" style={{ backgroundColor: colors.screen }}>
@@ -178,7 +350,7 @@ export default function VoiceInputScreen() {
               Voice input
             </Text>
             <Text className="mt-1 text-sm" style={{ color: colors.secondary }}>
-              Press and hold the microphone to record. Release to process your expense.
+              Press and hold to record, then release. Keep clips to 15–20 seconds (30 seconds max).
             </Text>
           </View>
 
@@ -237,7 +409,9 @@ export default function VoiceInputScreen() {
                 void handlePressIn();
               }}
               onPressOut={() => {
-                void handleStop();
+                if (!stoppedAtMaxDurationRef.current) {
+                  void handleStop();
+                }
               }}
               disabled={isProcessing || isSavingExpense}
               className="items-center justify-center rounded-full"
@@ -255,8 +429,31 @@ export default function VoiceInputScreen() {
 
           {isRecording && (
             <Text className="mt-3 text-base font-semibold" style={{ color: "#dc2626" }}>
-              Recording...
+              Recording {formatDuration(recordingDurationSeconds)} / 00:30
             </Text>
+          )}
+
+          {!!processingError && (
+            <View className="mt-5 w-full items-center">
+              <Text className="text-center text-sm" style={{ color: "#dc2626" }}>
+                {processingError}
+              </Text>
+              {!!transcript && (
+                <Text className="mt-2 text-center text-sm" style={{ color: colors.secondary }}>
+                  Transcript: {transcript}
+                </Text>
+              )}
+              {!!lastRecordingUri && (
+                <Pressable
+                  onPress={() => void handleRetry()}
+                  disabled={isProcessing}
+                  className="mt-3 rounded-xl px-5 py-3"
+                  style={{ backgroundColor: colors.accent, opacity: isProcessing ? 0.6 : 1 }}
+                >
+                  <Text className="font-semibold text-white">Retry this recording</Text>
+                </Pressable>
+              )}
+            </View>
           )}
 
           <Pressable
@@ -307,55 +504,124 @@ export default function VoiceInputScreen() {
             }}
           >
             <Text className="text-xl font-bold" style={{ color: colors.primary }}>
-              {detectedExpenses.length === 1 ? "Detected Expense:" : "Detected Expenses:"}
+              {detectedExpenses.length === 1 ? "Review detected expense" : "Review detected expenses"}
             </Text>
+            <Text className="mt-2 text-sm" style={{ color: colors.secondary }}>
+              Check and correct these details before saving.
+            </Text>
+
+            {!!transcript && (
+              <View
+                className="mt-4 rounded-xl p-3"
+                style={{ backgroundColor: isDarkMode ? "#111827" : "#f1f5f9" }}
+              >
+                <Text className="text-xs font-semibold" style={{ color: colors.secondary }}>
+                  Transcript
+                </Text>
+                <Text className="mt-1 text-sm" style={{ color: colors.primary }}>
+                  {transcript}
+                </Text>
+              </View>
+            )}
 
             <ScrollView
               className="mt-5"
               showsVerticalScrollIndicator={false}
-              style={{ maxHeight: 280 }}
+              style={{ maxHeight: 360 }}
             >
               {detectedExpenses.map((expense, index) => (
                 <View
-                  key={`${expense.matchedCategory}-${expense.amount}-${index}`}
+                  key={`voice-expense-${index}`}
                   className="mb-3 rounded-2xl border p-4"
                   style={{
                     backgroundColor: isDarkMode ? "#111827" : "#eff6ff",
                     borderColor: colors.border,
                   }}
                 >
-                  <Text className="text-sm" style={{ color: colors.secondary }}>
-                    Category:{" "}
-                    <Text className="font-semibold" style={{ color: colors.primary }}>
-                      {expense.matchedCategory}
-                    </Text>
+                  <Text className="mb-1 text-xs font-medium" style={{ color: colors.secondary }}>
+                    Amount ({currency})
                   </Text>
-                  <Text className="mt-2 text-sm" style={{ color: colors.secondary }}>
-                    Amount:{" "}
-                    <Text className="font-semibold" style={{ color: colors.primary }}>
-                      ₹{formatDetectedAmount(expense.amount)}
-                    </Text>
+                  <TextInput
+                    value={expense.amount}
+                    onChangeText={(value) => updateDetectedExpense(index, "amount", value)}
+                    keyboardType="decimal-pad"
+                    accessibilityLabel={`Expense ${index + 1} amount`}
+                    className="rounded-lg border px-3 py-2"
+                    style={{
+                      color: colors.primary,
+                      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+                      borderColor: colors.border,
+                    }}
+                  />
+                  <Text className="mb-1 mt-3 text-xs font-medium" style={{ color: colors.secondary }}>
+                    Category
                   </Text>
+                  <TextInput
+                    value={expense.category}
+                    onChangeText={(value) => updateDetectedExpense(index, "category", value)}
+                    accessibilityLabel={`Expense ${index + 1} category`}
+                    className="rounded-lg border px-3 py-2"
+                    style={{
+                      color: colors.primary,
+                      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+                      borderColor: colors.border,
+                    }}
+                  />
+                  <Text className="mb-1 mt-3 text-xs font-medium" style={{ color: colors.secondary }}>
+                    Date (YYYY-MM-DD)
+                  </Text>
+                  <TextInput
+                    value={expense.date}
+                    onChangeText={(value) => updateDetectedExpense(index, "date", value)}
+                    placeholder="YYYY-MM-DD"
+                    accessibilityLabel={`Expense ${index + 1} date`}
+                    className="rounded-lg border px-3 py-2"
+                    style={{
+                      color: colors.primary,
+                      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+                      borderColor: colors.border,
+                    }}
+                  />
                 </View>
               ))}
             </ScrollView>
 
-            <Text className="text-sm" style={{ color: colors.secondary }}>
-              {detectedExpenses.length === 1
-                ? "Confirm to save this expense."
-                : `Confirm to save ${detectedExpenses.length} expenses.`}
+            <Text className="text-xs" style={{ color: colors.secondary }}>
+              Amount must be positive and date must be a real YYYY-MM-DD date.
             </Text>
 
             <Pressable
               onPress={() => {
                 void handleConfirmExpense();
               }}
-              disabled={isSavingExpense}
+              disabled={
+                isSavingExpense ||
+                detectedExpenses.some(
+                  ({ amount, category, date }) =>
+                    !Number.isFinite(Number(amount)) ||
+                    Number(amount) <= 0 ||
+                    !category.trim() ||
+                    !isValidDateInput(date)
+                )
+              }
               className="mt-5 items-center rounded-2xl px-6 py-4"
-              style={{ backgroundColor: colors.accent, opacity: isSavingExpense ? 0.7 : 1 }}
+              style={{
+                backgroundColor: colors.accent,
+                opacity:
+                  isSavingExpense ||
+                  detectedExpenses.some(
+                    ({ amount, category, date }) =>
+                      !Number.isFinite(Number(amount)) ||
+                      Number(amount) <= 0 ||
+                      !category.trim() ||
+                      !isValidDateInput(date)
+                  )
+                    ? 0.5
+                    : 1,
+              }}
             >
               <Text className="text-base font-semibold text-white">
-                {isSavingExpense ? "Saving..." : "Confirm"}
+                {isSavingExpense ? "Saving..." : "Confirm and save"}
               </Text>
             </Pressable>
 

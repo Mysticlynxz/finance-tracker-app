@@ -10,15 +10,23 @@ import {
   Permission,
   Query,
   Role,
+  Storage,
 } from "appwrite";
 import { normalizeCurrencyCode } from "../constants/currency";
 
-const APPWRITE_ENDPOINT = "https://cloud.appwrite.io/v1";
-const APPWRITE_PROJECT_ID = "69a4662b001f58493387";
-export const APPWRITE_DATABASE_ID = "69a4e415003c658fe722";
-const APPWRITE_EXPENSES_COLLECTION_ID = "expenses";
-const APPWRITE_BUDGETS_COLLECTION_ID = "budgets";
-const APPWRITE_AI_ADVISOR_FUNCTION_ID ="69a76eab00275ef10835";
+const APPWRITE_ENDPOINT =
+  process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT?.trim() || "https://cloud.appwrite.io/v1";
+const APPWRITE_PROJECT_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_PROJECT_ID?.trim() || "69a4662b001f58493387";
+export const APPWRITE_DATABASE_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_DATABASE_ID?.trim() || "69a4e415003c658fe722";
+export const VOICE_RECORDINGS_BUCKET_ID = "spendwise-voice-recordings";
+const APPWRITE_EXPENSES_COLLECTION_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_EXPENSES_COLLECTION_ID?.trim() || "expenses";
+const APPWRITE_BUDGETS_COLLECTION_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_BUDGETS_COLLECTION_ID?.trim() || "budgets";
+export const APPWRITE_AI_ADVISOR_FUNCTION_ID =
+  process.env.EXPO_PUBLIC_APPWRITE_AI_ADVISOR_FUNCTION_ID?.trim() || "69a76eab00275ef10835";
 export const AI_ADVISOR_FALLBACK_RESPONSE =
   "I'm having trouble right now, but hey — tracking expenses already puts you ahead of most people 😄";
 const AI_ADVISOR_UNAVAILABLE_MESSAGE = AI_ADVISOR_FALLBACK_RESPONSE;
@@ -37,6 +45,7 @@ const client = new Client()
 export const account = new Account(client);
 export const databases = new Databases(client);
 export const functions = new Functions(client);
+export const storage = new Storage(client);
 
 export const getErrorMessage = (error: unknown) => {
   if (error instanceof AppwriteException || error instanceof Error) {

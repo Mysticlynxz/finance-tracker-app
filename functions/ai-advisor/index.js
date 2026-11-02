@@ -1,5 +1,4 @@
-import { Client, Databases, Query } from "appwrite";
-import fetch from "node-fetch";
+import { Account, Client, Databases, Permission, Query, Role, Storage } from "appwrite";
 
 console.log("Function started");
 
@@ -14,8 +13,12 @@ const DEFAULT_DISPLAY_CURRENCY = "INR";
 const DEFAULT_EXTRACTED_EXPENSE = JSON.stringify({
   category: "Others",
   amount: 0,
+  date: null,
 });
 const RECENT_EXPENSE_LIMIT = 8;
+const VOICE_RECORDINGS_BUCKET_ID = "spendwise-voice-recordings";
+const MAX_VOICE_RECORDING_BYTES = 5 * 1024 * 1024;
+const GNANI_ENDPOINT = "https://api.vachana.ai/stt/v3";
 
 // DATABASE RULE:
 // Always store raw INR values ONLY.
@@ -26,7 +29,7 @@ const RECENT_EXPENSE_LIMIT = 8;
 //
 // AI RULE:
 // Always respond in the selected currency.
-// Voice NLP extracts only category + amount.
+// Voice NLP extracts amount, category, and transaction date.
 const currencyConfig = {
   INR: { symbol: "\u20B9", rate: 1 },
   USD: { symbol: "$", rate: 83 },
@@ -79,7 +82,7 @@ const parseRequestBody = (req) => {
     try {
       return JSON.parse(req.body);
     } catch {
-      return {};
+      throw new Error("Request body must contain valid JSON.");
     }
   }
 
@@ -89,7 +92,7 @@ const parseRequestBody = (req) => {
     try {
       return JSON.parse(rawBody);
     } catch {
-      return {};
+      throw new Error("Request body must contain valid JSON.");
     }
   }
 
@@ -278,20 +281,47 @@ const sanitizeJsonReply = (reply) =>
     .replace(/\s*```$/i, "")
     .trim();
 
+const getKolkataCurrentDate = () => {
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(dateParts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const normalizeExpenseDate = (value) => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const parsedDate = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value
+    ? value
+    : null;
+};
+
 const buildVoiceExpenseReply = async ({ apiKey, transcript }) => {
+  const currentDate = getKolkataCurrentDate();
   const extractionPrompt = `
-Extract expense details from this sentence:
-"${transcript}"
+Extract the expense details from the following original transcript:
+${JSON.stringify(transcript)}
 
 Return ONLY JSON:
 {
   "category": "string",
-  "amount": number
+  "amount": number,
+  "date": "YYYY-MM-DD" or null
 }
 
 Rules:
 - If category unclear -> "Others"
 - If amount missing -> 0
+- Use ${currentDate} as today's date in the Asia/Kolkata timezone.
+- Resolve relative dates such as today, yesterday, last Monday, and two days ago using that reference date.
+- If no transaction date is spoken, return null. Do not infer or invent a date.
 - No explanation
 `.trim();
 
@@ -304,7 +334,12 @@ Rules:
   const reply = extractReplyText(data);
 
   if (!reply) {
-    return DEFAULT_EXTRACTED_EXPENSE;
+    return JSON.stringify({
+      category: "Others",
+      amount: 0,
+      date: null,
+      transcript,
+    });
   }
 
   const parsed = JSON.parse(sanitizeJsonReply(reply));
@@ -317,7 +352,233 @@ Rules:
   return JSON.stringify({
     category,
     amount,
+    date: normalizeExpenseDate(parsed?.date),
+    transcript,
   });
+};
+
+const isValidVoiceFileId = (fileId) =>
+  typeof fileId === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/.test(fileId);
+
+const hasExpectedVoicePermissions = (permissions, userId) => {
+  if (!Array.isArray(permissions)) {
+    return false;
+  }
+
+  const expected = [
+    Permission.read(Role.user(userId)),
+    Permission.delete(Role.user(userId)),
+  ].sort();
+
+  return permissions.length === expected.length &&
+    [...permissions].sort().every((permission, index) => permission === expected[index]);
+};
+
+const isSupportedVoiceFile = (file) => {
+  const fileName = typeof file?.name === "string" ? file.name.toLowerCase() : "";
+  const extension = fileName.split(".").pop();
+  const supportedTypes = new Map([
+    ["m4a", new Set(["audio/mp4", "audio/m4a", "audio/x-m4a"])],
+    ["aac", new Set(["audio/aac", "audio/mp4"])],
+  ]);
+  const validMimeTypes = supportedTypes.get(extension);
+
+  return Boolean(
+    validMimeTypes?.has(typeof file?.mimeType === "string" ? file.mimeType.toLowerCase() : "")
+  );
+};
+
+const hasValidAudioContainer = (audio, file) => {
+  const extension = file.name.toLowerCase().split(".").pop();
+
+  if (extension === "m4a") {
+    return audio.length >= 8 && audio.toString("ascii", 4, 8) === "ftyp";
+  }
+
+  return (
+    extension === "aac" &&
+    audio.length >= 2 &&
+    audio[0] === 0xff &&
+    (audio[1] & 0xf6) === 0xf0
+  );
+};
+
+export const requestGnaniTranscription = async ({
+  audio,
+  fileName,
+  mimeType,
+  apiKey,
+}) => {
+  const form = new FormData();
+  form.append("audio_file", new Blob([audio], { type: mimeType }), fileName);
+  form.append("model", "prisma-v3.0");
+  form.append("language_code", "indic-auto");
+  form.append("format", "transcribe");
+
+  const response = await fetch(GNANI_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "X-API-Key-ID": apiKey,
+    },
+    body: form,
+    signal: AbortSignal.timeout(16_000),
+  });
+
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    throw new Error("Gnani returned an invalid response.");
+  }
+
+  if (!response.ok || result?.success !== true || typeof result.transcript !== "string") {
+    throw new Error("Gnani transcription request failed.");
+  }
+
+  return {
+    transcript: result.transcript.trim(),
+    ...(typeof result.detected_language_code === "string"
+      ? { detected_language_code: result.detected_language_code }
+      : {}),
+  };
+};
+
+const getVoiceTranscriptionResponse = async ({ req, body, log }) => {
+  if (req?.method !== "POST") {
+    return { status: 405, payload: { error: "POST is required." } };
+  }
+
+  if (!/^application\/json(?:\s*;|$)/i.test(getHeader(req, "content-type").trim())) {
+    return { status: 415, payload: { error: "A JSON request body is required." } };
+  }
+
+  const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
+  const userId = getHeader(req, "x-appwrite-user-id").trim();
+  if (!jwt || !userId) {
+    return { status: 401, payload: { error: "Authentication is required." } };
+  }
+
+  const fileId = body?.fileId;
+  const bucketId = body?.bucketId;
+  if (
+    !isValidVoiceFileId(fileId) ||
+    typeof bucketId !== "string" ||
+    bucketId !== VOICE_RECORDINGS_BUCKET_ID
+  ) {
+    return { status: 400, payload: { error: "A valid recording and bucket are required." } };
+  }
+
+  let client;
+  let storage;
+  let file;
+  try {
+    client = createAppwriteClient(req);
+    if (!client) {
+      return { status: 401, payload: { error: "Authentication is required." } };
+    }
+
+    const account = new Account(client);
+    const authenticatedUser = await account.get();
+    if (authenticatedUser.$id !== userId) {
+      return { status: 401, payload: { error: "Authentication is invalid." } };
+    }
+
+    storage = new Storage(client);
+    file = await storage.getFile({ bucketId: VOICE_RECORDINGS_BUCKET_ID, fileId });
+  } catch {
+    return { status: 403, payload: { error: "Recording is unavailable or access was denied." } };
+  }
+
+  if (
+    file.bucketId !== VOICE_RECORDINGS_BUCKET_ID ||
+    !hasExpectedVoicePermissions(file.$permissions, userId)
+  ) {
+    return { status: 403, payload: { error: "Recording ownership could not be verified." } };
+  }
+
+  let status = 200;
+  let payload;
+  try {
+    if (
+      !Number.isSafeInteger(file.sizeOriginal) ||
+      file.sizeOriginal <= 0 ||
+      file.sizeOriginal > MAX_VOICE_RECORDING_BYTES
+    ) {
+      status = 413;
+      throw new Error("Recording size is invalid.");
+    }
+
+    if (!isSupportedVoiceFile(file)) {
+      status = 415;
+      throw new Error("Recording format is not supported.");
+    }
+
+    const apiKey = process.env.GNANI_API_KEY?.trim();
+    if (!apiKey) {
+      status = 503;
+      throw new Error("Transcription is temporarily unavailable.");
+    }
+
+    const downloadUrl = storage.getFileDownload({
+      bucketId: VOICE_RECORDINGS_BUCKET_ID,
+      fileId,
+    });
+    const downloadResponse = await fetch(downloadUrl, {
+      headers: {
+        "X-Appwrite-Project": APPWRITE_PROJECT_ID,
+        "X-Appwrite-JWT": jwt,
+      },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!downloadResponse.ok) {
+      status = 502;
+      throw new Error("Unable to retrieve the recording.");
+    }
+
+    const audio = Buffer.from(await downloadResponse.arrayBuffer());
+    if (audio.length !== file.sizeOriginal || audio.length > MAX_VOICE_RECORDING_BYTES) {
+      status = 400;
+      throw new Error("Recording contents did not match the uploaded file.");
+    }
+
+    if (!hasValidAudioContainer(audio, file)) {
+      status = 415;
+      throw new Error("Recording contents are not a supported audio format.");
+    }
+
+    const transcription = await requestGnaniTranscription({
+      audio,
+      fileName: `voice-recording.${file.name.toLowerCase().split(".").pop()}`,
+      mimeType: file.mimeType,
+      apiKey,
+    });
+    payload = transcription;
+  } catch (transcriptionError) {
+    log("Voice transcription request failed.");
+    if (status === 200) {
+      status = transcriptionError?.name === "TimeoutError" ? 504 : 502;
+    }
+    payload = {
+      error:
+        status === 503
+          ? "Transcription is temporarily unavailable."
+          : status === 504
+            ? "Transcription timed out. Please retry."
+            : "Unable to transcribe this recording. Please retry.",
+    };
+  } finally {
+    try {
+      await storage.deleteFile({ bucketId: VOICE_RECORDINGS_BUCKET_ID, fileId });
+    } catch {
+      log("Temporary voice recording cleanup failed.");
+      if (status === 200) {
+        status = 500;
+        payload = { error: "Unable to securely finish processing the recording." };
+      }
+    }
+  }
+
+  return { status, payload };
 };
 
 const buildAdvisorReply = async ({ apiKey, currency, financialContext, message, log }) => {
@@ -394,8 +655,24 @@ const shouldReturnStartupResponse = ({ req, body, jwt }) => {
 export default async ({ req, res, log, error }) => {
   log("Function started");
 
+  let body;
   try {
-    const body = parseRequestBody(req);
+    body = parseRequestBody(req);
+  } catch {
+    return res.json({ error: "Request body must contain valid JSON." }, 400);
+  }
+
+  try {
+    const mode =
+      typeof body.mode === "string" && body.mode.trim()
+        ? body.mode.trim().toLowerCase()
+        : "advisor";
+
+    if (mode === "transcribe-voice") {
+      const result = await getVoiceTranscriptionResponse({ req, body, log });
+      return res.json(result.payload, result.status);
+    }
+
     const jwt = getHeader(req, "x-appwrite-user-jwt").trim();
 
     if (shouldReturnStartupResponse({ req, body, jwt })) {
@@ -414,11 +691,6 @@ export default async ({ req, res, log, error }) => {
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY is missing.");
     }
-
-    const mode =
-      typeof body.mode === "string" && body.mode.trim()
-        ? body.mode.trim().toLowerCase()
-        : "advisor";
 
     if (mode === "extract-expense") {
       const transcript =
@@ -461,8 +733,8 @@ export default async ({ req, res, log, error }) => {
     });
 
     return res.json({ reply });
-  } catch (err) {
-    error(`Gemini error: ${err?.message || String(err)}`);
+  } catch {
+    error("AI request failed.");
     return res.json({ reply: AI_ADVISOR_FALLBACK });
   }
 };
