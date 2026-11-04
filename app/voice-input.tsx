@@ -18,12 +18,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
 import { createExpense } from "../lib/appwrite";
 import { extractExpenseFromUserText } from "../lib/expenseExtraction";
+import { isValidCurrencyAmount } from "../lib/amountValidation";
 import { useAudioRecorder } from "../lib/useAudioRecorder";
 import { transcribeAudioUri } from "../lib/voiceTranscription";
 
 const MAX_RECORDING_DURATION_MS = 30_000;
 
 interface DetectedExpense {
+  /** Stable identifier assigned when the expense is first detected. Preserved across retries. */
+  id: string;
   amount: string;
   category: string;
   date: string;
@@ -37,25 +40,43 @@ const getLocalDateInput = () => {
 };
 
 const isValidDateInput = (value: string) => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  const trimmed = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     return false;
   }
 
-  const [year, month, day] = value.split("-").map(Number);
+  const [year, month, day] = trimmed.split("-").map(Number);
   const date = new Date(year, month - 1, day);
-  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+  return (
+    date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day
+  );
+};
+
+// Delegate to shared validator so voice and manual entry use identical rules.
+const isValidAmount = (value: string): boolean => isValidCurrencyAmount(value);
+
+const isValidCategory = (value: string) => {
+  return typeof value === "string" && value.trim().length > 0;
 };
 
 const toExpenseTimestamp = (dateInput: string) => {
-  const [year, month, day] = dateInput.split("-").map(Number);
-  return new Date(year, month - 1, day, 12).toISOString();
+  const [year, month, day] = dateInput.trim().split("-").map(Number);
+  // Use UTC noon to avoid timezone shifting the expense into the previous day.
+  // This ensures the stored date always matches the intended calendar date regardless
+  // of the client's time zone.
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0)).toISOString();
 };
 
 const formatDuration = (seconds: number) =>
   `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 
+/** Generate a stable unique identifier for a pending expense. */
+const generateExpenseId = (): string => `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 export default function VoiceInputScreen() {
-  const { isDarkMode, currency, convertToINR } = useContext(ExpenseContext);
+  const { isDarkMode, currency, convertToINR, isCurrencyReady } = useContext(ExpenseContext);
   const { recording, startRecording, stopRecording } = useAudioRecorder();
   const [detectedExpenses, setDetectedExpenses] = useState<DetectedExpense[]>([]);
   const [isSavingExpense, setIsSavingExpense] = useState(false);
@@ -111,6 +132,7 @@ export default function VoiceInputScreen() {
     const validExpenses = expenses
       .filter((expense) => Number.isFinite(expense.amount) && expense.amount > 0)
       .map(({ amount, category, date }) => ({
+        id: generateExpenseId(),
         amount: String(amount),
         category,
         date: date ?? getLocalDateInput(),
@@ -118,7 +140,7 @@ export default function VoiceInputScreen() {
 
     if (validExpenses.length === 0) {
       setDetectedExpenses([]);
-      setProcessingError("No valid expense was detected. Retry or record the expense again.");
+      setProcessingError("No expenses were found in the transcript. Retry or record the expense again.");
       return;
     }
 
@@ -127,40 +149,85 @@ export default function VoiceInputScreen() {
   };
 
   const handleConfirmExpense = async () => {
-    if (
-      detectedExpenses.length === 0 ||
-      isSavingExpense ||
-      detectedExpenses.some(
-        ({ amount, category, date }) =>
-          !Number.isFinite(Number(amount)) ||
-          Number(amount) <= 0 ||
-          !category.trim() ||
-          !isValidDateInput(date)
-      )
-    ) {
+    if (!isCurrencyReady) {
+      Alert.alert("Currency loading", "Please wait for currency settings to finish loading before saving.");
+      return;
+    }
+
+    if (isSavingExpense) {
+      return;
+    }
+
+    const hasInvalidExpense = detectedExpenses.some(
+      ({ amount, category, date }) =>
+        !isValidAmount(amount) || !isValidCategory(category) || !isValidDateInput(date)
+    );
+
+    if (hasInvalidExpense) {
       return;
     }
 
     setIsSavingExpense(true);
 
     try {
-      for (const { amount, category, date } of detectedExpenses) {
-        const amountInINR = convertToINR(Number(amount));
-        if (!Number.isFinite(amountInINR) || amountInINR <= 0) {
-          throw new Error("Expense amount could not be converted to INR.");
+      const total = detectedExpenses.length;
+      let savedCount = 0;
+      const failedIds = new Set<string>();
+
+      for (const expense of detectedExpenses) {
+        const { id, amount, category, date } = expense;
+        const parsedAmount = Number(amount.trim());
+        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+          failedIds.add(id);
+          continue;
         }
 
-        await createExpense({
-          amount: amountInINR,
-          category: category.trim(),
-          date: toExpenseTimestamp(date),
-        });
+        const amountInINR = convertToINR(parsedAmount);
+        if (!Number.isFinite(amountInINR) || amountInINR <= 0) {
+          failedIds.add(id);
+          continue;
+        }
 
-        console.log("Saved voice expense:", { category: category.trim() });
+        try {
+          await createExpense({
+            documentId: id,
+            amount: amountInINR,
+            category: category.trim(),
+            date: toExpenseTimestamp(date),
+          });
+          savedCount++;
+          console.log("Saved voice expense:", { id, category: category.trim() });
+        } catch (error) {
+          console.error("[Voice Input] Save failed for item:", error);
+          failedIds.add(id);
+        }
       }
 
-      setDetectedExpenses([]);
-      router.replace("/home");
+      if (savedCount === total) {
+        // All saved successfully.
+        setDetectedExpenses([]);
+        router.replace("/home");
+      } else if (savedCount > 0) {
+        // Partial success: keep only the failed items for retry.
+        const remaining = total - savedCount;
+        const failedExpenses = detectedExpenses.filter((e) => failedIds.has(e.id));
+        setDetectedExpenses(failedExpenses);
+        Alert.alert(
+          "Partial save",
+          `${savedCount} of ${total} expenses were saved. ${remaining} failed and are shown below for retry.`,
+          [
+            {
+              text: "OK",
+            },
+          ]
+        );
+      } else {
+        // None saved — keep all items for retry.
+        Alert.alert(
+          "Save failed",
+          `Unable to save ${total} expense${total > 1 ? "s" : ""}. Please check your connection and try again.`,
+        );
+      }
     } catch (error) {
       console.error("[Voice Input] Save failed:", error);
       Alert.alert("Save failed", "Unable to save expense. Please try again.");
@@ -529,78 +596,106 @@ export default function VoiceInputScreen() {
               showsVerticalScrollIndicator={false}
               style={{ maxHeight: 360 }}
             >
-              {detectedExpenses.map((expense, index) => (
-                <View
-                  key={`voice-expense-${index}`}
-                  className="mb-3 rounded-2xl border p-4"
-                  style={{
-                    backgroundColor: isDarkMode ? "#111827" : "#eff6ff",
-                    borderColor: colors.border,
-                  }}
-                >
-                  <Text className="mb-1 text-xs font-medium" style={{ color: colors.secondary }}>
-                    Amount ({currency})
-                  </Text>
-                  <TextInput
-                    value={expense.amount}
-                    onChangeText={(value) => updateDetectedExpense(index, "amount", value)}
-                    keyboardType="decimal-pad"
-                    accessibilityLabel={`Expense ${index + 1} amount`}
-                    className="rounded-lg border px-3 py-2"
-                    style={{
-                      color: colors.primary,
-                      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
-                      borderColor: colors.border,
-                    }}
-                  />
-                  <Text className="mb-1 mt-3 text-xs font-medium" style={{ color: colors.secondary }}>
-                    Category
-                  </Text>
-                  <TextInput
-                    value={expense.category}
-                    onChangeText={(value) => updateDetectedExpense(index, "category", value)}
-                    accessibilityLabel={`Expense ${index + 1} category`}
-                    className="rounded-lg border px-3 py-2"
-                    style={{
-                      color: colors.primary,
-                      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
-                      borderColor: colors.border,
-                    }}
-                  />
-                  <Text className="mb-1 mt-3 text-xs font-medium" style={{ color: colors.secondary }}>
-                    Date (YYYY-MM-DD)
-                  </Text>
-                  <TextInput
-                    value={expense.date}
-                    onChangeText={(value) => updateDetectedExpense(index, "date", value)}
-                    placeholder="YYYY-MM-DD"
-                    accessibilityLabel={`Expense ${index + 1} date`}
-                    className="rounded-lg border px-3 py-2"
-                    style={{
-                      color: colors.primary,
-                      backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
-                      borderColor: colors.border,
-                    }}
-                  />
-                </View>
-              ))}
-            </ScrollView>
+              {detectedExpenses.map((expense, index) => {
+                const amountError = !isValidAmount(expense.amount)
+                  ? "Enter a valid positive number."
+                  : "";
+                const categoryError = !isValidCategory(expense.category)
+                  ? "Category cannot be empty."
+                  : "";
+                const dateError = !isValidDateInput(expense.date)
+                  ? "Enter a real date (YYYY-MM-DD)."
+                  : "";
+                const isLocked = isSavingExpense;
 
-            <Text className="text-xs" style={{ color: colors.secondary }}>
-              Amount must be positive and date must be a real YYYY-MM-DD date.
-            </Text>
+                return (
+                  <View
+                    key={expense.id}
+                    className="mb-3 rounded-2xl border p-4"
+                    style={{
+                      backgroundColor: isDarkMode ? "#111827" : "#eff6ff",
+                      borderColor: colors.border,
+                      opacity: isLocked ? 0.5 : 1,
+                    }}
+                  >
+                    <Text className="mb-1 text-xs font-medium" style={{ color: colors.secondary }}>
+                      Amount ({currency})
+                    </Text>
+                    <TextInput
+                      value={expense.amount}
+                      onChangeText={(value) => updateDetectedExpense(index, "amount", value)}
+                      keyboardType="decimal-pad"
+                      editable={!isLocked}
+                      accessibilityLabel={`Expense ${index + 1} amount`}
+                      className="rounded-lg border px-3 py-2"
+                      style={{
+                        color: colors.primary,
+                        backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+                        borderColor: amountError ? "#dc2626" : colors.border,
+                      }}
+                    />
+                    {!!amountError && (
+                      <Text className="mt-1 text-xs" style={{ color: "#dc2626" }}>
+                        {amountError}
+                      </Text>
+                    )}
+                    <Text className="mb-1 mt-3 text-xs font-medium" style={{ color: colors.secondary }}>
+                      Category
+                    </Text>
+                    <TextInput
+                      value={expense.category}
+                      onChangeText={(value) => updateDetectedExpense(index, "category", value)}
+                      editable={!isLocked}
+                      accessibilityLabel={`Expense ${index + 1} category`}
+                      className="rounded-lg border px-3 py-2"
+                      style={{
+                        color: colors.primary,
+                        backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+                        borderColor: categoryError ? "#dc2626" : colors.border,
+                      }}
+                    />
+                    {!!categoryError && (
+                      <Text className="mt-1 text-xs" style={{ color: "#dc2626" }}>
+                        {categoryError}
+                      </Text>
+                    )}
+                    <Text className="mb-1 mt-3 text-xs font-medium" style={{ color: colors.secondary }}>
+                      Date (YYYY-MM-DD)
+                    </Text>
+                    <TextInput
+                      value={expense.date}
+                      onChangeText={(value) => updateDetectedExpense(index, "date", value)}
+                      placeholder="YYYY-MM-DD"
+                      editable={!isLocked}
+                      accessibilityLabel={`Expense ${index + 1} date`}
+                      className="rounded-lg border px-3 py-2"
+                      style={{
+                        color: colors.primary,
+                        backgroundColor: isDarkMode ? "#1e293b" : "#ffffff",
+                        borderColor: dateError ? "#dc2626" : colors.border,
+                      }}
+                    />
+                    {!!dateError && (
+                      <Text className="mt-1 text-xs" style={{ color: "#dc2626" }}>
+                        {dateError}
+                      </Text>
+                    )}
+                  </View>
+                );
+              })}
+            </ScrollView>
 
             <Pressable
               onPress={() => {
                 void handleConfirmExpense();
               }}
               disabled={
+                !isCurrencyReady ||
                 isSavingExpense ||
                 detectedExpenses.some(
                   ({ amount, category, date }) =>
-                    !Number.isFinite(Number(amount)) ||
-                    Number(amount) <= 0 ||
-                    !category.trim() ||
+                    !isValidAmount(amount) ||
+                    !isValidCategory(category) ||
                     !isValidDateInput(date)
                 )
               }
@@ -608,12 +703,12 @@ export default function VoiceInputScreen() {
               style={{
                 backgroundColor: colors.accent,
                 opacity:
+                  !isCurrencyReady ||
                   isSavingExpense ||
                   detectedExpenses.some(
                     ({ amount, category, date }) =>
-                      !Number.isFinite(Number(amount)) ||
-                      Number(amount) <= 0 ||
-                      !category.trim() ||
+                      !isValidAmount(amount) ||
+                      !isValidCategory(category) ||
                       !isValidDateInput(date)
                   )
                     ? 0.5
@@ -621,7 +716,7 @@ export default function VoiceInputScreen() {
               }}
             >
               <Text className="text-base font-semibold text-white">
-                {isSavingExpense ? "Saving..." : "Confirm and save"}
+                {isSavingExpense ? "Saving..." : !isCurrencyReady ? "Loading..." : "Confirm and save"}
               </Text>
             </Pressable>
 

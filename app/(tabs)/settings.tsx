@@ -1,6 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { type Href, router } from "expo-router";
-import { useCallback, useContext, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   ActivityIndicator,
@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext, SUPPORTED_CURRENCIES } from "../../Context/ExpenseContext";
-import { getBudget, getExpenses, logoutUser, resetAllData } from "../../lib/appwrite";
+import { getCurrentUser, getBudget, getExpenses, logoutUser, resetAllData } from "../../lib/appwrite";
 
 const LOGIN_ROUTE = "/login" as Href;
 
@@ -32,6 +32,28 @@ export default function SettingsScreen() {
   const [isResettingData, setIsResettingData] = useState(false);
   const [storedBudget, setStoredBudget] = useState<number>(0);
   const [storedExpenseCount, setStoredExpenseCount] = useState(0);
+  const [userName, setUserName] = useState<string>("");
+  const [userEmail, setUserEmail] = useState<string>("");
+  const [userLoading, setUserLoading] = useState(true);
+  const [userError, setUserError] = useState(false);
+
+  const loadUserProfile = async () => {
+    setUserLoading(true);
+    setUserError(false);
+    try {
+      const user = await getCurrentUser();
+      setUserName(user.name && user.name.trim() ? user.name.trim() : "");
+      setUserEmail(user.email);
+      setUserLoading(false);
+    } catch {
+      setUserError(true);
+      setUserLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadUserProfile();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -183,10 +205,37 @@ export default function SettingsScreen() {
               <Ionicons name="person-outline" size={22} color="#1d4ed8" />
             </View>
             <View>
-              <Text className="text-base font-semibold" style={{ color: colors.primary }}>
-                Krishnan
-              </Text>
-              <Text style={{ color: colors.secondary }}>krishnan@example.com</Text>
+              {userLoading ? (
+                <ActivityIndicator size="small" color={colors.secondary} />
+              ) : userError ? (
+                <View>
+                  <Text className="text-base font-semibold" style={{ color: colors.primary }}>
+                    Unable to load profile
+                  </Text>
+                  <Text style={{ color: colors.secondary }}>Check your connection and try again.</Text>
+                  <Pressable
+                    onPress={() => void loadUserProfile()}
+                    disabled={userLoading}
+                    className="mt-2 rounded-lg px-3 py-1.5"
+                    style={{ backgroundColor: colors.subtle }}
+                  >
+                    {userLoading ? (
+                      <ActivityIndicator size="small" color="#2563eb" />
+                    ) : (
+                      <Text className="text-sm font-semibold" style={{ color: "#2563eb" }}>
+                        Retry
+                      </Text>
+                    )}
+                  </Pressable>
+                </View>
+              ) : (
+                <View>
+                  <Text className="text-base font-semibold" style={{ color: colors.primary }}>
+                    {userName || "User"}
+                  </Text>
+                  <Text style={{ color: colors.secondary }}>{userEmail}</Text>
+                </View>
+              )}
             </View>
           </View>
         </View>

@@ -34,5 +34,22 @@
             "runtimeSpecification": "s-0.5vcpu-512mb",
             "deploymentRetention": 0
         }
+    ],
+    "buckets": [
+        {
+            "$id": "spendwise-voice-recordings",
+            "$permissions": [
+                "create(\"users\")"
+            ],
+            "fileSecurity": true,
+            "name": "spendwise-voice-recordings",
+            "enabled": true,
+            "maximumFileSize": 50000000,
+            "allowedFileExtensions": ["m4a",
+                "webm"],
+            "compression": "none",
+            "encryption": true,
+            "antivirus": true
+        }
     ]
 }

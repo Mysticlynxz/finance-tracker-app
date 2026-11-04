@@ -1,3 +1,4 @@
+import "react-native-url-polyfill/auto";
 import "./global.css";
 import { type Href, Redirect, Stack, useSegments } from "expo-router";
 import { useEffect, useState } from "react";

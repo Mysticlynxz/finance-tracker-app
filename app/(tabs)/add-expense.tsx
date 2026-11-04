@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../../Context/ExpenseContext";
 import { DEFAULT_CATEGORIES, type CategoryOption } from "../../constants/categories";
+import { parseCurrencyAmount } from "../../lib/amountValidation";
 import { createCategory, getCategories } from "../../lib/categoryService";
 import { createExpense } from "../../lib/appwrite";
 
@@ -23,7 +24,7 @@ const mapCategoryDocument = (category: { name: string; icon: string }): Category
 });
 
 export default function AddExpense() {
-  const { isDarkMode, currency, addExpense, convertToINR } = useContext(ExpenseContext);
+  const { isDarkMode, currency, addExpense, convertToINR, isCurrencyReady } = useContext(ExpenseContext);
   const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<CategoryOption | null>(null);
   const [amount, setAmount] = useState("");
@@ -102,6 +103,11 @@ export default function AddExpense() {
   };
 
   const handleAddExpense = async () => {
+    if (!isCurrencyReady) {
+      Alert.alert("Currency loading", "Please wait for currency settings to finish loading before saving.");
+      return;
+    }
+
     if (!selectedCategory) {
       Alert.alert("Missing category", "Please choose a category first.");
       return;
@@ -112,9 +118,8 @@ export default function AddExpense() {
       return;
     }
 
-    const parsedAmount = Number(amount);
-
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+    const parsedAmount = parseCurrencyAmount(amount);
+    if (parsedAmount === null) {
       Alert.alert("Invalid amount", "Please enter a valid amount greater than 0.");
       return;
     }
@@ -320,12 +325,12 @@ export default function AddExpense() {
             <TouchableOpacity
               activeOpacity={0.85}
               onPress={handleAddExpense}
-              disabled={isSavingExpense}
+              disabled={!isCurrencyReady || isSavingExpense}
               className="mt-5 items-center rounded-2xl bg-blue-600 py-4"
-              style={{ opacity: isSavingExpense ? 0.7 : 1 }}
+              style={{ opacity: (!isCurrencyReady || isSavingExpense) ? 0.7 : 1 }}
             >
               <Text className="text-base font-semibold text-white">
-                {isSavingExpense ? "Saving..." : "Add Expense"}
+                {!isCurrencyReady ? "Loading..." : isSavingExpense ? "Saving..." : "Add Expense"}
               </Text>
             </TouchableOpacity>
 

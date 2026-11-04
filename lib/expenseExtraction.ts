@@ -34,6 +34,7 @@ const normalizeParsedExpenses = (parsed: unknown): Record<string, unknown>[] => 
   }
 
   if (isRecord(parsed)) {
+    if (Array.isArray(parsed.expenses)) return parsed.expenses.filter(isRecord);
     return [parsed];
   }
 
@@ -49,6 +50,22 @@ const normalizeExpenseDate = (value: unknown): string | null => {
   return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value
     ? value
     : null;
+};
+
+const parseExpenseAmount = (value: unknown): number | null => {
+  let numericValue: number;
+  if (typeof value === "number") {
+    numericValue = value;
+  } else if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim())) {
+    numericValue = Number(value.trim());
+  } else {
+    return null;
+  }
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return null;
+  const rounded = numericValue > Number.MAX_VALUE / 100
+    ? numericValue
+    : Math.round(numericValue * 100) / 100;
+  return Number.isFinite(rounded) && rounded > 0 ? rounded : null;
 };
 
 export const buildValidExpenseCategories = (userCategories: string[] = []) => {
@@ -151,24 +168,29 @@ export const extractExpenseFromUserText = async (
   try {
     parsed = JSON.parse(reply) as unknown;
   } catch {
-    parsed = [];
+    throw new Error("Expense extraction returned an invalid response. Please retry.");
   }
 
-  const expenses = normalizeParsedExpenses(parsed).map((expense) => {
+  if (!Array.isArray(parsed) && !isRecord(parsed)) {
+    throw new Error("Expense extraction returned an invalid response. Please retry.");
+  }
+
+  const expenses = normalizeParsedExpenses(parsed).flatMap((expense) => {
     const rawCategory =
       typeof expense.category === "string" && expense.category.trim()
         ? expense.category.trim()
         : EXTRACTION_FALLBACK.category;
-    const amount = Number(expense.amount) || 0;
+    const amount = parseExpenseAmount(expense.amount);
+    if (amount === null) return [];
     const matchedCategory = matchExpenseCategory(rawCategory, validCategories);
 
-    return {
+    return [{
       amount,
       category: matchedCategory,
       date: normalizeExpenseDate(expense.date),
       rawCategory,
       parsed: expense,
-    };
+    }];
   });
 
   return {

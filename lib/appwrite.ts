@@ -14,9 +14,9 @@ import {
 } from "appwrite";
 import { normalizeCurrencyCode } from "../constants/currency";
 
-const APPWRITE_ENDPOINT =
-  process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT?.trim() || "https://cloud.appwrite.io/v1";
-const APPWRITE_PROJECT_ID =
+export const APPWRITE_ENDPOINT =
+  process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT?.trim() || "https://fra.cloud.appwrite.io/v1";
+export const APPWRITE_PROJECT_ID =
   process.env.EXPO_PUBLIC_APPWRITE_PROJECT_ID?.trim() || "69a4662b001f58493387";
 export const APPWRITE_DATABASE_ID =
   process.env.EXPO_PUBLIC_APPWRITE_DATABASE_ID?.trim() || "69a4e415003c658fe722";
@@ -74,6 +74,12 @@ export interface CreateExpenseInput {
   amount: number;
   category: string;
   date: string;
+  /**
+   * Optional stable document ID for idempotent retries.
+   * When provided, createExpense will reuse this ID so that a retry after
+   * a network timeout does not create a duplicate document.
+   */
+  documentId?: string;
 }
 
 export interface SetBudgetInput {
@@ -219,18 +225,70 @@ export const createExpense = async (
       throw new Error("Expense amount must be a valid number greater than 0.");
     }
 
-    return await databases.createDocument<ExpenseDocument>({
-      databaseId: APPWRITE_DATABASE_ID,
-      collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
-      documentId: ID.unique(),
-      data: {
-        amount: normalizedAmount,
-        category: input.category,
-        date: input.date,
-        userId: user.$id,
-      },
-      permissions: buildUserDocumentPermissions(user.$id),
-    });
+    const documentId = input.documentId ?? ID.unique();
+
+    try {
+      return await databases.createDocument<ExpenseDocument>({
+        databaseId: APPWRITE_DATABASE_ID,
+        collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
+        documentId,
+        data: {
+          amount: normalizedAmount,
+          category: input.category,
+          date: input.date,
+          userId: user.$id,
+        },
+        permissions: buildUserDocumentPermissions(user.$id),
+      });
+    } catch (createError) {
+      // If the document already exists (e.g. retry after a timeout), retrieve it
+      // and verify it belongs to the current user with expected data.
+      const errorMessage = getErrorMessage(createError);
+
+      // Only an HTTP conflict can represent an existing stable document ID.
+      if (!(createError instanceof AppwriteException) || createError.code !== 409) {
+        throw createError;
+      }
+
+      {
+        try {
+          const existing = await databases.getDocument<ExpenseDocument>({
+            databaseId: APPWRITE_DATABASE_ID,
+            collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
+            documentId,
+          });
+
+          // Verify ownership — never trust an arbitrary conflict.
+          if (existing.userId !== user.$id) {
+            throw new Error(
+              "Expense document conflict: document belongs to a different user."
+            );
+          }
+
+          // Verify the data matches what we intended to create.
+          // Compare at the application's two-decimal storage precision.
+          const existingAmount = Number(existing.amount);
+          if (!Number.isFinite(existingAmount) || Math.round(existingAmount * 100) !== Math.round(normalizedAmount * 100) || existing.category !== input.category || existing.date !== input.date) {
+            throw new Error(
+              "Expense document conflict: existing document data does not match expected values."
+            );
+          }
+
+          console.log("[Appwrite] createExpense retrieved existing document on retry:", existing.$id);
+          return existing;
+        } catch (retrieveError) {
+          if (retrieveError instanceof Error && retrieveError.message.startsWith("Expense document conflict:")) {
+            throw retrieveError;
+          }
+          // If retrieval or verification fails, throw the original error.
+          console.error("[Appwrite] Failed to retrieve existing expense document:", retrieveError);
+          throw new Error(errorMessage);
+        }
+      }
+
+      // Not a conflict — rethrow the original error.
+      throw new Error(errorMessage);
+    }
   } catch (error) {
     const message = getErrorMessage(error);
     console.error("[Appwrite] createExpense failed:", message);
@@ -427,6 +485,6 @@ export const requestExpenseExtractionReply = async ({
   } catch (error) {
     const errorMessage = getErrorMessage(error);
     console.error("[Appwrite] requestExpenseExtractionReply failed:", errorMessage);
-    return DEFAULT_EXPENSE_EXTRACTION_REPLY;
+    throw new Error("Expense extraction service is unavailable. Please retry.");
   }
 };
