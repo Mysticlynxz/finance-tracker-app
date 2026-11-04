@@ -8,11 +8,7 @@ const EXPENSE_EXTRACTION_GEMINI_MODEL = "gemini-3-flash-preview";
 const buildGeminiEndpoint = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const DEFAULT_DISPLAY_CURRENCY = "INR";
-const DEFAULT_EXTRACTED_EXPENSE = JSON.stringify({
-  category: "Others",
-  amount: 0,
-  date: null,
-});
+const DEFAULT_EXTRACTED_EXPENSE = JSON.stringify({ expenses: [] });
 const RECENT_EXPENSE_LIMIT = 8;
 const VOICE_RECORDINGS_BUCKET_ID = "spendwise-voice-recordings";
 const MAX_VOICE_RECORDING_BYTES = 5 * 1024 * 1024;
@@ -301,22 +297,37 @@ const normalizeExpenseDate = (value) => {
     : null;
 };
 
+const parseExpenseAmount = (value) => {
+  let numericValue;
+  if (typeof value === "number") {
+    numericValue = value;
+  } else if (typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim())) {
+    numericValue = Number(value.trim());
+  } else {
+    return null;
+  }
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return null;
+  const rounded = numericValue > Number.MAX_VALUE / 100
+    ? numericValue
+    : Math.round(numericValue * 100) / 100;
+  return Number.isFinite(rounded) && rounded > 0 ? rounded : null;
+};
+
 const buildVoiceExpenseReply = async ({ apiKey, transcript }) => {
   const currentDate = getKolkataCurrentDate();
   const extractionPrompt = `
 Extract the expense details from the following original transcript:
 ${JSON.stringify(transcript)}
 
-Return ONLY JSON:
-{
-  "category": "string",
-  "amount": number,
-  "date": "YYYY-MM-DD" or null
-}
+Return ONLY JSON with an expenses array, one object per distinct transaction:
+{"expenses":[{"category":"string","amount":number,"date":"YYYY-MM-DD" or null}]}
 
 Rules:
-- If category unclear -> "Others"
-- If amount missing -> 0
+- Extract every distinct expense. Never merge amounts into a total.
+- Each expense must have its own amount and category. Do not invent missing values.
+- Preserve ambiguous items with the known fields and use "Others" only when category is genuinely unclear.
+- If amount or category cannot be identified, omit that item rather than inventing data.
+- The original transcript may be English, Malayalam, Hindi, Tamil, or mixed language; interpret it as spoken without requiring translation.
 - Use ${currentDate} as today's date in the Asia/Kolkata timezone.
 - Resolve relative dates such as today, yesterday, last Monday, and two days ago using that reference date.
 - If no transaction date is spoken, return null. Do not infer or invent a date.
@@ -331,28 +342,16 @@ Rules:
 
   const reply = extractReplyText(data);
 
-  if (!reply) {
-    return JSON.stringify({
-      category: "Others",
-      amount: 0,
-      date: null,
-      transcript,
-    });
-  }
+  if (!reply) throw new Error("Gemini returned an empty expense extraction response.");
 
   const parsed = JSON.parse(sanitizeJsonReply(reply));
-  const category =
-    typeof parsed?.category === "string" && parsed.category.trim()
-      ? parsed.category.trim()
-      : "Others";
-  const amount = roundAmount(parsed?.amount);
-
-  return JSON.stringify({
-    category,
-    amount,
-    date: normalizeExpenseDate(parsed?.date),
-    transcript,
-  });
+  const candidates = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.expenses) ? parsed.expenses : [parsed];
+  const expenses = candidates.filter((item) => item && typeof item === "object" && !Array.isArray(item)).map((item) => ({
+    category: typeof item.category === "string" ? item.category.trim() : "",
+    amount: parseExpenseAmount(item.amount),
+    date: normalizeExpenseDate(item.date),
+  })).filter((item) => item.category && item.amount !== null);
+  return JSON.stringify({ expenses, transcript });
 };
 
 const isValidVoiceFileId = (fileId) =>
@@ -884,6 +883,10 @@ export default async ({ req, res, log, error }) => {
 
     return res.json({ reply });
   } catch (cause) {
+    if (typeof body.mode === "string" && body.mode.trim().toLowerCase() === "extract-expense") {
+      error("Expense extraction failed.");
+      return res.json({ error: "Unable to extract expenses. Please retry." }, 502);
+    }
     if (typeof body.mode === "string" && body.mode.trim().toLowerCase() === "transcribe-voice") {
       error(
         JSON.stringify({

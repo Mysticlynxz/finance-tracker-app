@@ -440,11 +440,7 @@ test("extracts a transaction date and preserves the exact original transcript", 
           content: {
             parts: [
               {
-                text: JSON.stringify({
-                  category: "Food",
-                  amount: 42,
-                  date: "2026-11-01",
-                }),
+                text: JSON.stringify({ expenses: [{ category: "Food", amount: 42, date: "2026-11-01" }] }),
               },
             ],
           },
@@ -460,7 +456,7 @@ test("extracts a transaction date and preserves the exact original transcript", 
   const extracted = JSON.parse(result.payload.reply);
 
   assert.equal(result.status, 200);
-  assert.equal(extracted.date, "2026-11-01");
+  assert.deepEqual(extracted.expenses, [{ category: "Food", amount: 42, date: "2026-11-01" }]);
   assert.equal(extracted.transcript, transcript);
   assert.match(prompt, /Asia\/Kolkata/);
   assert.match(prompt, /If no transaction date is spoken, return null/);
@@ -481,7 +477,7 @@ test("returns null for an absent date and safely handles Gemini extraction failu
         candidates: [
           {
             content: {
-              parts: [{ text: JSON.stringify({ category: "Food", amount: 10, date: null }) }],
+              parts: [{ text: JSON.stringify({ expenses: [{ category: "Food", amount: 10, date: null }] }) }],
             },
           },
         ],
@@ -491,7 +487,7 @@ test("returns null for an absent date and safely handles Gemini extraction failu
       message: "I spent 10 rupees on food",
     });
 
-    assert.equal(JSON.parse(result.payload.reply).date, null);
+    assert.equal(JSON.parse(result.payload.reply).expenses[0].date, null);
   });
 
   await t.test("provider failure", async () => {
@@ -501,8 +497,69 @@ test("returns null for an absent date and safely handles Gemini extraction failu
       message: "I spent 10 rupees on food",
     });
 
-    assert.equal(result.status, 200);
+    assert.equal(result.status, 502);
+    assert.match(result.payload.error, /Unable to extract expenses/);
     assert.equal(JSON.stringify(result).includes("private detail"), false);
     assert.equal(JSON.stringify(result).includes("test-gemini-key"), false);
   });
+});
+
+test("extracts multiple transactions independently and supports legacy and multilingual transcripts", async (t) => {
+  const cases = [
+    ["one", "I spent 500 on food", [{ amount: 500, category: "Food", date: null }]],
+    ["two", "500 food and 200 bills", [{ amount: 500, category: "Food", date: null }, { amount: 200, category: "Bills", date: null }]],
+    ["three", "food 500, bills 200, travel 80", [{ amount: 500, category: "Food", date: null }, { amount: 200, category: "Bills", date: null }, { amount: 80, category: "Travel", date: null }]],
+    ["different dates", "food yesterday, bills today", [{ amount: 5, category: "Food", date: "2026-11-03" }, { amount: 8, category: "Bills", date: "2026-11-04" }]],
+    ["Malayalam", "ഭക്ഷണത്തിന് 500 രൂപ ചെലവാക്കി", [{ amount: 500, category: "Food", date: null }]],
+    ["mixed language", "500 രൂപ food ന്, 200 bills ന്", [{ amount: 500, category: "Food", date: null }, { amount: 200, category: "Bills", date: null }]],
+  ];
+  for (const [label, transcript, expenses] of cases) {
+    await t.test(label, async () => {
+      globalThis.fetch = async () => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ expenses }) }] } }] });
+      const result = await callHandler({ mode: "extract-expense", message: transcript }, { headers: { "x-appwrite-user-jwt": "test-user-jwt" } });
+      assert.deepEqual(JSON.parse(result.payload.reply).expenses, expenses);
+      assert.equal(JSON.parse(result.payload.reply).transcript, transcript);
+    });
+  }
+  await t.test("empty list and malformed items do not fabricate zero expenses", async () => {
+    globalThis.fetch = async () => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ expenses: [{ amount: 0, category: "Food" }, { amount: 10 }, { amount: 12, category: "Bills", date: "not-a-date" }] }) }] } }] });
+    const result = await callHandler({ mode: "extract-expense", message: "ambiguous" }, { headers: { "x-appwrite-user-jwt": "test-user-jwt" } });
+    assert.deepEqual(JSON.parse(result.payload.reply).expenses, [{ amount: 12, category: "Bills", date: null }]);
+  });
+  await t.test("legacy single-object response remains one expense", async () => {
+    globalThis.fetch = async () => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ amount: 25, category: "Food", date: null }) }] } }] });
+    const result = await callHandler({ mode: "extract-expense", message: "food 25" }, { headers: { "x-appwrite-user-jwt": "test-user-jwt" } });
+    assert.deepEqual(JSON.parse(result.payload.reply).expenses, [{ amount: 25, category: "Food", date: null }]);
+  });
+});
+
+test("strictly rejects malformed expense amounts and preserves valid decimal amounts", async (t) => {
+  const invalid = [true, false, null, undefined, [], {}, " ", "abc", "0xFF", "1e5", 0, -100, "NaN", "Infinity"];
+  const candidates = invalid.map((amount) => ({ amount, category: "Food" }));
+  candidates.push({ amount: 100, category: "Food" }, { amount: 100.5, category: "Bills" }, { amount: "500", category: "Travel" });
+  await t.test("rejects invalid and retains individually valid expenses", async () => {
+    globalThis.fetch = async () => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ expenses: candidates }) }] } }] });
+    const result = await callHandler({ mode: "extract-expense", message: "expenses" }, { headers: { "x-appwrite-user-jwt": "test-user-jwt" } });
+    assert.deepEqual(JSON.parse(result.payload.reply).expenses, [
+      { amount: 100, category: "Food", date: null },
+      { amount: 100.5, category: "Bills", date: null },
+      { amount: 500, category: "Travel", date: null },
+    ]);
+  });
+  await t.test("accepts a one item array and retains cent precision", async () => {
+    globalThis.fetch = async () => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ expenses: [{ amount: 100.509, category: "Food" }] }) }] } }] });
+    const result = await callHandler({ mode: "extract-expense", message: "food" }, { headers: { "x-appwrite-user-jwt": "test-user-jwt" } });
+    assert.deepEqual(JSON.parse(result.payload.reply).expenses, [{ amount: 100.51, category: "Food", date: null }]);
+  });
+});
+
+test("rejects amounts whose two-decimal rounding overflows and keeps finite amounts", async () => {
+  const values = [1e307, 1e306, Number.MAX_VALUE, 1e100, 100, 100.5, 0.01, 0.004];
+  const expenses = values.map((amount) => ({ amount, category: "Food" }));
+  globalThis.fetch = async () => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ expenses }) }] } }] });
+  const result = await callHandler({ mode: "extract-expense", message: "amounts" }, { headers: { "x-appwrite-user-jwt": "test-user-jwt" } });
+  const accepted = JSON.parse(result.payload.reply).expenses;
+  assert.deepEqual(accepted.map(({ amount }) => amount), [1e307, 1e306, Number.MAX_VALUE, 1e100, 100, 100.5, 0.01]);
+  assert.ok(accepted.every(({ amount }) => Number.isFinite(amount) && amount > 0));
+  assert.ok(accepted.every(({ amount }) => amount !== null && Number.isFinite(amount)));
 });
