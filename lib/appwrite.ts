@@ -103,6 +103,13 @@ export interface BudgetDocument extends Models.Document {
   userId: string;
 }
 
+export interface UserBudgetRecord {
+  amount: number;
+  userId: string;
+  documentId: string;
+  createdAt: string;
+}
+
 // IMPORTANT:
 // Always store raw currency values ONLY in INR.
 // Never convert or scale before writing anything except selected currency -> INR.
@@ -328,7 +335,7 @@ export const clearExpenses = async (): Promise<number> => {
 
 export const setBudget = async (
   input: SetBudgetInput
-): Promise<Models.Document> => {
+): Promise<BudgetDocument> => {
   try {
     const user = await getCurrentUser();
     const normalizedAmount = Number(input.amount);
@@ -375,7 +382,7 @@ export const setBudget = async (
   }
 };
 
-export const getBudget = async (): Promise<number | null> => {
+export const getBudgetRecord = async (): Promise<UserBudgetRecord | null> => {
   try {
     const user = await getCurrentUser();
 
@@ -391,12 +398,26 @@ export const getBudget = async (): Promise<number | null> => {
       return null;
     }
 
-    return parseNumericAmount(budget.amount, `budget:${budget.$id}`);
+    if (budget.userId !== user.$id) {
+      throw new Error("Budget record owner does not match the authenticated user.");
+    }
+
+    return {
+      amount: parseNumericAmount(budget.amount, `budget:${budget.$id}`),
+      userId: user.$id,
+      documentId: budget.$id,
+      createdAt: budget.$createdAt,
+    };
   } catch (error) {
     const message = getErrorMessage(error);
     console.error("[Appwrite] getBudget failed:", message);
     throw new Error(message);
   }
+};
+
+export const getBudget = async (): Promise<number | null> => {
+  const budget = await getBudgetRecord();
+  return budget?.amount ?? null;
 };
 
 export const clearBudget = async (): Promise<number> => {

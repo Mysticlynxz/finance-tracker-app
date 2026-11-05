@@ -8,9 +8,9 @@ import { Alert, Animated, Pressable, ScrollView, Text, TextInput, View } from "r
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   clearBudget,
-  getBudget,
   getExpenses,
   setBudget as saveBudget,
+  getBudgetRecord,
   type ExpenseDocument,
 } from "../../lib/appwrite";
 import { markCurrentBudgetMonth, syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
@@ -50,7 +50,7 @@ export default function Budget() {
       const loadBudgetData = async () => {
         try {
           const [budgetFromDb, expensesFromDb] = await Promise.all([
-            getBudget(),
+            getBudgetRecord(),
             getExpenses(),
           ]);
 
@@ -201,8 +201,13 @@ export default function Budget() {
         throw new Error("Budget amount could not be converted to INR.");
       }
 
-      await saveBudget({ amount: Number(budgetInINR) });
-      await markCurrentBudgetMonth();
+      const savedBudget = await saveBudget({ amount: Number(budgetInINR) });
+      await markCurrentBudgetMonth({
+        amount: budgetInINR,
+        userId: savedBudget.userId,
+        documentId: savedBudget.$id,
+        createdAt: savedBudget.$createdAt,
+      });
       setBudgetLocal(budgetInINR);
       setSavedBudgetInINR(budgetInINR);
       setBudgetValue(formatBudgetInputValue(parsedBudget));

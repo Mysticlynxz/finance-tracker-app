@@ -8,7 +8,7 @@ import { ExpenseContext } from "../../Context/ExpenseContext";
 import {
   account,
   clearBudget,
-  getBudget,
+  getBudgetRecord,
   getExpenses,
   type ExpenseDocument,
 } from "../../lib/appwrite";
@@ -211,7 +211,7 @@ export default function Home() {
 
       const fetchBudget = async () => {
         try {
-          const result = await getBudget();
+          const result = await getBudgetRecord();
           const { budgetAmount: activeBudget } = await syncBudgetForCurrentMonth(
             result,
             clearBudget

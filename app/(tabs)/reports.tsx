@@ -13,7 +13,13 @@ import {
   VictoryTooltip,
 } from "victory-native";
 import { ExpenseContext } from "../../Context/ExpenseContext";
-import { getBudget, getExpenses, type ExpenseDocument } from "../../lib/appwrite";
+import { clearBudget, getBudgetRecord, getExpenses, type ExpenseDocument } from "../../lib/appwrite";
+import { syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
+import {
+  aggregateDailyAmounts,
+  filterItemsForMonth,
+  getCurrentMonthDateKeys,
+} from "../../lib/reportDates";
 
 interface TrendPoint {
   x: string;
@@ -21,61 +27,44 @@ interface TrendPoint {
 }
 
 const formatDateLabel = (dateKey: string) => {
-  const date = new Date(dateKey);
-  if (Number.isNaN(date.getTime())) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
     return dateKey;
   }
-
-  return `${date.getMonth() + 1}/${date.getDate()}`;
+  const [, month, day] = dateKey.split("-");
+  return `${Number(month)}/${Number(day)}`;
 };
 
 export default function Reports() {
   const { isDarkMode, formatAmount, convertFromINR, currency, isCurrencyReady } =
     useContext(ExpenseContext);
   const [expenses, setExpenses] = useState<ExpenseDocument[]>([]);
-  const [budget, setBudgetState] = useState<number>(0);
+  const [budget, setBudgetState] = useState<number | null>(null);
+  const [monthDateKeys, setMonthDateKeys] = useState(() => getCurrentMonthDateKeys());
   const screenWidth = Dimensions.get("window").width;
   const chartWidth = Math.max(screenWidth - 48, 280);
   const pieChartWidth = Math.max(screenWidth - 80, 220);
-  const getCurrentMonthDates = () => {
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = today.getMonth();
-    const lastDay = new Date(year, month + 1, 0).getDate();
-
-    return Array.from({ length: lastDay }, (_, index) => {
-      const date = new Date(year, month, index + 1);
-      return date.toISOString().slice(0, 10);
-    });
-  };
-
   useFocusEffect(
     useCallback(() => {
-      const fetchBudget = async () => {
+      let isActive = true;
+      setMonthDateKeys(getCurrentMonthDateKeys());
+
+      const loadReportData = async () => {
         try {
-          const result = await getBudget();
-          setBudgetState(result ?? 0);
+          const [budgetResult, expenseResult] = await Promise.all([getBudgetRecord(), getExpenses()]);
+          if (!isActive) return;
+          const { budgetAmount } = await syncBudgetForCurrentMonth(budgetResult, clearBudget);
+          if (!isActive) return;
+          setBudgetState(budgetAmount !== null && budgetAmount > 0 ? budgetAmount : null);
+          setExpenses(expenseResult);
         } catch (error) {
-          console.error("Failed to fetch budget", error);
+          console.error("Failed to load reports data", error);
         }
       };
 
-      void fetchBudget();
-    }, [])
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      const fetchExpenses = async () => {
-        try {
-          const data = await getExpenses();
-          setExpenses(data);
-        } catch (error) {
-          console.error("Failed to load expenses", error);
-        }
+      void loadReportData();
+      return () => {
+        isActive = false;
       };
-
-      void fetchExpenses();
     }, [])
   );
 
@@ -104,14 +93,18 @@ export default function Reports() {
     return Number.isFinite(numericAmount) ? numericAmount : 0;
   };
 
-  const totalExpense = useMemo(
-    () => expenses.reduce((sum, expense) => sum + getExpenseAmount(expense), 0),
-    [expenses]
+  const monthExpenses = useMemo(
+    () => filterItemsForMonth(expenses, monthDateKeys),
+    [expenses, monthDateKeys]
   );
-  const remainingBudget = Math.max(0, budget - totalExpense);
-  const budgetUsagePercentage = budget > 0 ? (totalExpense / budget) * 100 : null;
+  const totalExpense = useMemo(
+    () => monthExpenses.reduce((sum, expense) => sum + getExpenseAmount(expense), 0),
+    [monthExpenses]
+  );
+  const remainingBudget = budget === null ? null : Math.max(0, budget - totalExpense);
+  const budgetUsagePercentage = budget !== null && budget > 0 ? (totalExpense / budget) * 100 : null;
   const convertedTotalExpense = convertFromINR(totalExpense);
-  const convertedRemainingBudget = convertFromINR(remainingBudget);
+  const convertedRemainingBudget = convertFromINR(remainingBudget ?? 0);
 
   const pieData = useMemo(
     () => [
@@ -140,20 +133,8 @@ export default function Reports() {
   );
 
   const dailyTrendData = useMemo<TrendPoint[]>(() => {
-    const totalsByDate: Record<string, number> = {};
-
-    expenses.forEach((expense) => {
-      const dateKey = expense.date.slice(0, 10);
-      totalsByDate[dateKey] = (totalsByDate[dateKey] || 0) + getExpenseAmount(expense);
-    });
-
-    return Object.entries(totalsByDate)
-      .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
-      .map(([date, amount]) => ({
-        x: date,
-        y: Number(amount.toFixed(2)),
-      }));
-  }, [expenses]);
+    return aggregateDailyAmounts(monthExpenses, getExpenseAmount);
+  }, [monthExpenses]);
 
   const trendTickValues = useMemo(() => {
     if (dailyTrendData.length <= 5) {
@@ -174,13 +155,26 @@ export default function Reports() {
     () => Math.max(...dailyTrendData.map((point) => point.y), 0),
     [dailyTrendData]
   );
-  const monthDates = useMemo(() => getCurrentMonthDates(), []);
+  const monthDates = monthDateKeys;
   const expenseDates = useMemo(
     () => new Set(dailyTrendData.map((point) => point.x)),
     [dailyTrendData]
   );
 
-  const hasPieData = totalExpense > 0 || remainingBudget > 0;
+  const hasBudget = budget !== null && budget > 0;
+  const hasMonthExpenses = totalExpense > 0;
+  const hasPieData = hasBudget;
+  const distributionMessage = !hasMonthExpenses && !hasBudget
+    ? "No expenses or monthly budget yet. Add expenses or set a budget to get started."
+    : hasMonthExpenses && !hasBudget
+      ? `You spent ${formatAmount(totalExpense)} this month. Set a monthly budget to track what remains.`
+      : !hasMonthExpenses
+        ? "No expenses recorded this month. Your full monthly budget remains."
+        : totalExpense > (budget ?? 0)
+          ? `You exceeded your monthly budget by ${formatAmount(totalExpense - (budget ?? 0))}.`
+          : totalExpense === budget
+            ? "Your monthly budget has been fully spent."
+            : "Your monthly budget is partially spent.";
 
   return (
     <SafeAreaView className="flex-1" style={{ backgroundColor: colors.screen }}>
@@ -211,21 +205,21 @@ export default function Reports() {
           </Text>
 
           <View className="mb-2 flex-row items-center justify-between">
-            <Text style={{ color: colors.secondary }}>Total Expense</Text>
+            <Text style={{ color: colors.secondary }}>Spent This Month</Text>
             <Text className="font-semibold" style={{ color: colors.primary }}>
               {formatAmount(totalExpense)}
             </Text>
           </View>
 
           <View className="mb-2 flex-row items-center justify-between">
-            <Text style={{ color: colors.secondary }}>Current Budget</Text>
+            <Text style={{ color: colors.secondary }}>Monthly Budget</Text>
             <Text className="font-semibold" style={{ color: colors.primary }}>
-              {formatAmount(budget)}
+              {budget === null ? "No budget set" : formatAmount(budget)}
             </Text>
           </View>
 
           <View className="flex-row items-center justify-between">
-            <Text style={{ color: colors.secondary }}>Budget Usage</Text>
+            <Text style={{ color: colors.secondary }}>Budget Used</Text>
             <Text className="font-semibold" style={{ color: colors.primary }}>
               {budgetUsagePercentage === null
                 ? "Set a budget to track"
@@ -296,16 +290,15 @@ export default function Reports() {
                     </Text>
                   </View>
                   <Text className="font-semibold" style={{ color: colors.secondary }}>
-                    {formatAmount(remainingBudget)}
+                    {formatAmount(remainingBudget ?? 0)}
                   </Text>
                 </View>
               </View>
             </View>
-          ) : (
-            <Text style={{ color: colors.secondary }}>
-              Set a budget or add expenses to view budget distribution.
-            </Text>
-          )}
+          ) : null}
+          <Text className={hasPieData ? "mt-3" : ""} style={{ color: colors.secondary }}>
+            {distributionMessage}
+          </Text>
         </View>
 
         <View
@@ -404,7 +397,7 @@ export default function Reports() {
               <View style={{ marginTop: 16 }}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   {monthDates.map((date) => {
-                    const dayNumber = new Date(date).getDate();
+                    const dayNumber = Number(date.slice(-2));
                     const hasExpense = expenseDates.has(date);
 
                     return (
