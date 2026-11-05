@@ -13,6 +13,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext, SUPPORTED_CURRENCIES } from "../../Context/ExpenseContext";
+import {
+  CURRENCY_CONFIG,
+  CURRENCY_NAMES,
+  formatCurrencyAmount,
+  normalizeCurrencyCode,
+} from "../../constants/currency";
 import { getCurrentUser, getBudget, getExpenses, logoutUser, resetAllData } from "../../lib/appwrite";
 
 const LOGIN_ROUTE = "/login" as Href;
@@ -23,9 +29,10 @@ export default function SettingsScreen() {
     isDarkMode,
     setIsDarkMode,
     currency,
+    isCurrencyReady,
     setCurrency,
     setBudget: setLocalBudget,
-    formatAmount,
+    convertFromINR,
   } = useContext(ExpenseContext);
   const [isCurrencyMenuOpen, setIsCurrencyMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -257,14 +264,16 @@ export default function SettingsScreen() {
               className="flex-row items-center justify-between rounded-xl px-3 py-3"
               style={{ backgroundColor: colors.subtle }}
             >
-              <View className="flex-row items-center gap-2">
+              <View className="flex-1 flex-row items-center gap-2">
                 <Ionicons name="globe-outline" size={20} color={colors.primary} />
-                <View>
+                <View className="min-w-0 flex-1">
                   <Text className="font-semibold" style={{ color: colors.primary }}>
                     Currency
                   </Text>
-                  <Text className="text-xs" style={{ color: colors.secondary }}>
-                    Selected: {currency}
+                  <Text className="text-xs" numberOfLines={2} style={{ color: colors.secondary }}>
+                    {isCurrencyReady
+                      ? `Selected: ${CURRENCY_NAMES[normalizeCurrencyCode(currency)]} (${currency} - ${CURRENCY_CONFIG[normalizeCurrencyCode(currency)].symbol})`
+                      : "Loading currency preference…"}
                   </Text>
                 </View>
               </View>
@@ -283,7 +292,7 @@ export default function SettingsScreen() {
                 style={{ backgroundColor: colors.card, borderColor: colors.border }}
               >
                 {SUPPORTED_CURRENCIES.map((supportedCurrency) => {
-                  const isSelected = supportedCurrency === currency;
+                  const isSelected = isCurrencyReady && supportedCurrency === currency;
                   return (
                     <Pressable
                       key={supportedCurrency}
@@ -320,7 +329,9 @@ export default function SettingsScreen() {
                   Edit Monthly Budget
                 </Text>
                 <Text className="text-xs" style={{ color: colors.secondary }}>
-                  Current: {formatAmount(storedBudget)}
+                  Current: {isCurrencyReady
+                    ? formatCurrencyAmount(convertFromINR(storedBudget), currency)
+                    : "Loading currency…"}
                 </Text>
               </View>
             </View>

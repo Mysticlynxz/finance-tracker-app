@@ -209,7 +209,7 @@ export default function AddExpense() {
               Add Expense
             </Text>
             <Text style={{ color: colors.secondary }}>
-              Pick a category and record what you spent in {currency}.
+              Pick a category and record what you spent in {isCurrencyReady ? currency : "Loading currency…"}.
             </Text>
           </View>
         </View>
@@ -306,17 +306,18 @@ export default function AddExpense() {
               {selectedCategory?.name}
             </Text>
             <Text className="mt-1 text-center text-sm text-slate-500">
-              Enter the expense amount in {currency}.
+              Enter the expense amount in {isCurrencyReady ? currency : "Loading currency…"}.
             </Text>
 
             <Text className="mt-5 mb-2 text-sm font-semibold text-slate-600">
-              Amount ({currency})
+              Amount ({isCurrencyReady ? currency : "Loading currency…"})
             </Text>
             <TextInput
               placeholder="0.00"
               keyboardType="decimal-pad"
               value={amount}
               onChangeText={setAmount}
+              editable={isCurrencyReady}
               className="rounded-2xl border px-4 py-4 text-base text-slate-900"
               style={{ borderColor: "#cbd5e1", backgroundColor: "#f8fafc" }}
               placeholderTextColor="#94a3b8"

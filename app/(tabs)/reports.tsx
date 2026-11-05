@@ -30,7 +30,7 @@ const formatDateLabel = (dateKey: string) => {
 };
 
 export default function Reports() {
-  const { isDarkMode, formatAmount, convertFromINR, currency } =
+  const { isDarkMode, formatAmount, convertFromINR, currency, isCurrencyReady } =
     useContext(ExpenseContext);
   const [expenses, setExpenses] = useState<ExpenseDocument[]>([]);
   const [budget, setBudgetState] = useState<number>(0);
@@ -196,7 +196,7 @@ export default function Reports() {
           Visual breakdown of your budget and daily expenses.
         </Text>
         <Text className="mb-4 text-xs font-semibold uppercase" style={{ color: colors.secondary }}>
-          Display Currency: {currency}
+          Display Currency: {isCurrencyReady ? currency : "Loading currency…"}
         </Text>
 
         <View

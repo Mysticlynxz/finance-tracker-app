@@ -28,6 +28,7 @@ export default function Home() {
   const remaining = budgetAmount - totalSpent;
   const percentageUsed = budgetAmount > 0 ? (totalSpent / budgetAmount) * 100 : 0;
   const cappedPercentageUsed = Math.max(0, Math.min(percentageUsed, 100));
+  const hasBudget = budgetAmount > 0;
   const [progressTrackWidth, setProgressTrackWidth] = useState(0);
   const [progressWidth] = useState(() => new Animated.Value(0));
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -105,8 +106,14 @@ export default function Home() {
     {}
   );
 
-  const statusIndicator =
-    percentageUsed < 50
+  const statusIndicator = !hasBudget
+    ? {
+        message: "Set a monthly budget to get spending guidance.",
+        icon: "ℹ️",
+        background: isDarkMode ? "#1e293b" : "#eff6ff",
+        text: isDarkMode ? "#cbd5e1" : "#1e40af",
+      }
+    : percentageUsed < 50
       ? {
           message: "You're managing your budget well.",
           icon: "\u{1F7E2}",
@@ -136,10 +143,15 @@ export default function Home() {
           ? "You've used 80% of your budget"
           : "";
 
-  const remainingAmountColor =
-    remaining >= 0 ? (isDarkMode ? "#86efac" : "#16a34a") : (isDarkMode ? "#fca5a5" : "#dc2626");
+  const remainingAmountColor = !hasBudget
+    ? (isDarkMode ? "#94a3b8" : "#475569")
+    : remaining >= 0 ? (isDarkMode ? "#86efac" : "#16a34a") : (isDarkMode ? "#fca5a5" : "#dc2626");
 
   const spendingInsight = (() => {
+    if (!hasBudget) {
+      return "Set a monthly budget to track your spending and get helpful insights.";
+    }
+
     if (expenses.length === 0) {
       return "Add transactions to unlock spending insights.";
     }
@@ -164,6 +176,34 @@ export default function Home() {
 
     return "Your spending pace looks steady so far.";
   })();
+
+  const getCategoryIcon = (category: string) => {
+    const normalized = category.trim().toLowerCase();
+    if (normalized.includes("food")) return "food-apple";
+    if (normalized.includes("grocer")) return "cart-outline";
+    if (normalized.includes("transport")) return "bus";
+    if (normalized.includes("travel")) return "airplane";
+    if (normalized.includes("bill")) return "receipt-text-outline";
+    if (normalized.includes("health")) return "heart-pulse";
+    if (normalized.includes("shop")) return "shopping-outline";
+    if (normalized.includes("education")) return "school-outline";
+    if (normalized.includes("entertain")) return "movie-open-outline";
+    return "shape-outline";
+  };
+
+  const dashboardCategories = expenses.reduce<string[]>((categories, expense) => {
+    const displayName = expense.category.trim();
+    const normalizedName = displayName.toLowerCase();
+
+    if (
+      displayName &&
+      !categories.some((category) => category.toLowerCase() === normalizedName)
+    ) {
+      categories.push(displayName);
+    }
+
+    return categories;
+  }, []).slice(0, 4);
 
   useFocusEffect(
     useCallback(() => {
@@ -293,12 +333,12 @@ export default function Home() {
         }}
       >
       <View className="mb-6 flex-row items-start justify-between">
-        <View>
+        <View className="flex-1 pr-3">
           <Text className="text-3xl font-extrabold" style={{ color: colors.primary }}>
             Dashboard
           </Text>
           <Text className="mt-1 text-base" style={{ color: colors.secondary }}>
-            Keep your spending on track.
+            Track your spending, build better habits, and stay in control of your money.
           </Text>
         </View>
         <Pressable
@@ -325,14 +365,14 @@ export default function Home() {
         style={{ backgroundColor: colors.card, borderColor: colors.border }}
       >
         <View className="flex-row items-center justify-between">
-          <View>
+          <View className="flex-1 pr-3">
             <Text
               className="text-sm font-semibold uppercase tracking-wide"
               style={{ color: colors.secondary }}
             >
               Monthly Budget
             </Text>
-            <Text className="mt-1 text-2xl font-bold" style={{ color: colors.primary }}>
+            <Text className="mt-1 text-2xl font-bold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: colors.primary }}>
               {formatAmount(budgetAmount)}
             </Text>
           </View>
@@ -344,7 +384,7 @@ export default function Home() {
             <Text className="text-xs font-semibold uppercase" style={{ color: colors.spentLabel }}>
               Spent
             </Text>
-            <Text className="mt-1 text-lg font-bold" style={{ color: colors.spentValue }}>
+            <Text className="mt-1 text-lg font-bold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: colors.spentValue }}>
               {formatAmount(totalSpent)}
             </Text>
           </View>
@@ -355,15 +395,15 @@ export default function Home() {
             >
               Remaining
             </Text>
-            <Text className="mt-1 text-2xl font-extrabold" style={{ color: remainingAmountColor }}>
-              {formatAmount(remaining)}
+            <Text className="mt-1 text-2xl font-extrabold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65} style={{ color: remainingAmountColor }}>
+              {hasBudget ? formatAmount(remaining) : "—"}
             </Text>
           </View>
         </View>
 
         <View className="mt-4">
           <Text className="text-xs font-semibold uppercase" style={{ color: colors.secondary }}>
-            {`${percentageUsed.toFixed(1)}% of budget used`}
+            {hasBudget ? `${percentageUsed.toFixed(1)}% of budget used` : "Set a budget to track progress"}
           </Text>
           <View
             className="mt-2 h-3 w-full overflow-hidden rounded-full"
@@ -457,6 +497,54 @@ export default function Home() {
         </Pressable>
       </View>
 
+      <View className="mt-6">
+        <View className="mb-3 flex-row items-center justify-between">
+          <Text className="text-lg font-bold" style={{ color: colors.primary }}>
+            Categories
+          </Text>
+          <Pressable
+            onPress={() => router.push("/reports")}
+            accessibilityRole="button"
+            accessibilityLabel="View all categories in reports"
+            className="flex-row items-center"
+          >
+            <Text className="text-sm font-medium" style={{ color: colors.secondary }}>
+              View All
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.secondary} />
+          </Pressable>
+        </View>
+        {dashboardCategories.length === 0 ? (
+          <Text className="text-sm" style={{ color: colors.secondary }}>
+            Categories from your expenses will appear here.
+          </Text>
+        ) : (
+          <View className="flex-row justify-between gap-2">
+            {dashboardCategories.map((category) => (
+              <View
+                key={category}
+                className="min-w-0 flex-1 items-center rounded-2xl border px-2 py-3"
+                style={{ backgroundColor: colors.card, borderColor: colors.border }}
+              >
+                <MaterialCommunityIcons
+                  name={getCategoryIcon(category)}
+                  size={24}
+                  color={isDarkMode ? "#60a5fa" : "#2563eb"}
+                />
+                <Text
+                  className="mt-2 w-full text-center text-xs font-semibold"
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  style={{ color: colors.primary }}
+                >
+                  {category}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+
       <View
         className="mt-6 rounded-2xl border p-4"
         style={{ backgroundColor: colors.card, borderColor: colors.border }}
@@ -481,15 +569,18 @@ export default function Home() {
                   className="mb-2 flex-row items-center justify-between rounded-xl px-3 py-3"
                   style={{ backgroundColor: colors.subtle }}
                 >
-                  <View className="flex-1 pr-4">
-                    <Text className="font-semibold" style={{ color: colors.primary }}>
-                      {expense.category}
-                    </Text>
+                  <View className="flex-1 flex-row items-center pr-3">
+                    <MaterialCommunityIcons name={getCategoryIcon(expense.category)} size={20} color="#3b82f6" />
+                    <View className="ml-3 flex-1">
+                      <Text className="font-semibold" numberOfLines={1} ellipsizeMode="tail" style={{ color: colors.primary }}>
+                        {expense.category}
+                      </Text>
                     <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>
                       {formatTimeLabel(expense.date)}
                     </Text>
+                    </View>
                   </View>
-                  <Text className="font-semibold" style={{ color: colors.primary }}>
+                  <Text className="shrink font-semibold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: colors.primary }}>
                     {formatAmount(getExpenseAmount(expense))}
                   </Text>
                 </View>

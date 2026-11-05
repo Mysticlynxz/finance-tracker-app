@@ -619,7 +619,7 @@ export default function VoiceInputScreen() {
                     }}
                   >
                     <Text className="mb-1 text-xs font-medium" style={{ color: colors.secondary }}>
-                      Amount ({currency})
+                      Amount ({isCurrencyReady ? currency : "Loading currency…"})
                     </Text>
                     <TextInput
                       value={expense.amount}

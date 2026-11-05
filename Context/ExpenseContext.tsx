@@ -47,6 +47,7 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
   const [isCurrencyReady, setIsCurrencyReady] = useState<boolean>(false);
   // Track the latest user-set currency so late hydration does not overwrite it.
   const latestUserCurrencyRef = React.useRef<string | null>(null);
+  const currencyWriteQueueRef = React.useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     let isMounted = true;
@@ -81,11 +82,17 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
     const normalized = normalizeCurrencyCode(value);
     latestUserCurrencyRef.current = normalized;
     setCurrencyState(normalized);
-    try {
-      await AsyncStorage.setItem(CURRENCY_STORAGE_KEY, normalized);
-    } catch (error) {
-      console.error("[ExpenseContext] Failed to save currency:", error);
-    }
+    currencyWriteQueueRef.current = currencyWriteQueueRef.current
+      .then(async () => {
+        // Skip stale queued writes when the user selected a newer currency.
+        if (latestUserCurrencyRef.current === normalized) {
+          await AsyncStorage.setItem(CURRENCY_STORAGE_KEY, normalized);
+        }
+      })
+      .catch((error) => {
+        console.error("[ExpenseContext] Failed to save currency:", error);
+      });
+    await currencyWriteQueueRef.current;
   }, []);
 
   const convertFromINR = useCallback(
@@ -100,9 +107,10 @@ export const ExpenseProvider = ({ children }: ExpenseProviderProps) => {
   );
 
   const formatAmount = useCallback(
-    (amountInINR: number) =>
-      formatCurrencyAmount(convertFromINRValue(amountInINR, currency), currency),
-    [currency]
+    (amountInINR: number) => isCurrencyReady
+      ? formatCurrencyAmount(convertFromINRValue(amountInINR, currency), currency)
+      : "Loading currency…",
+    [currency, isCurrencyReady]
   );
 
   const addExpense = (amountInINR: number, category: string) => {

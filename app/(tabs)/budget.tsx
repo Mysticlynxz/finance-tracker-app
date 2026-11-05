@@ -2,6 +2,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import { ExpenseContext } from "../../Context/ExpenseContext";
+import { CURRENCY_CONFIG, normalizeCurrencyCode } from "../../constants/currency";
 import { router } from "expo-router";
 import { Alert, Animated, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -28,6 +29,7 @@ export default function Budget() {
     setBudget: setBudgetLocal,
     isDarkMode,
     currency,
+    isCurrencyReady,
     formatAmount,
     convertToINR,
     convertFromINR,
@@ -117,6 +119,11 @@ export default function Budget() {
       };
 
   const numericBudget = Number(budget) || 0;
+  const currencySymbol = isCurrencyReady
+    ? CURRENCY_CONFIG[normalizeCurrencyCode(currency)].symbol
+    : null;
+  const formatSelectedAmount = (amount: number) =>
+    currencySymbol ? `${currencySymbol}${amount.toFixed(2)}` : "Loading currency…";
   const hasInput = budget.trim().length > 0;
   const hasSavedBudget = savedBudgetInINR > 0;
   const spentAmount = convertFromINR(spentAmountInINR);
@@ -176,6 +183,11 @@ export default function Budget() {
   }, [animatedWidth, progress]);
 
   const handleSave = async () => {
+    if (!isCurrencyReady) {
+      Alert.alert("Currency loading", "Please wait for currency settings to finish loading before saving.");
+      return;
+    }
+
     const parsedBudget = Number(budget);
     if (!Number.isFinite(parsedBudget) || parsedBudget <= 0) {
       Alert.alert("Invalid budget", "Please enter a valid budget greater than 0.");
@@ -229,7 +241,9 @@ export default function Budget() {
             Define your monthly spending limits
           </Text>
           <Text className="mt-2 text-sm font-medium" style={{ color: colors.secondary }}>
-            {`🤖 Suggested budget: ${currency} ${suggestedBudget.toLocaleString()}`}
+            {isCurrencyReady
+              ? `🤖 Suggested budget: ${currencySymbol}${suggestedBudget.toLocaleString()}`
+              : "Loading currency…"}
           </Text>
         </View>
       </View>
@@ -247,7 +261,7 @@ export default function Budget() {
           </Text>
         ) : null}
         <Text className="mb-2 text-sm font-semibold" style={{ color: colors.secondary }}>
-          Monthly Budget Amount ({currency})
+          Monthly Budget Amount ({isCurrencyReady ? currency : "Loading currency…"})
         </Text>
 
         {isEditing ? (
@@ -261,6 +275,7 @@ export default function Budget() {
               keyboardType="decimal-pad"
               value={budget}
               onChangeText={setBudgetValue}
+              editable={isCurrencyReady}
               className="flex-1 px-3 py-3 text-base"
               style={{ color: colors.primary }}
               placeholderTextColor={colors.placeholder}
@@ -268,7 +283,7 @@ export default function Budget() {
           </View>
         ) : (
           <Text className="mt-2 text-2xl font-bold" style={{ color: colors.primary }}>
-            {currency} {numericBudget.toFixed(2)}
+            {formatSelectedAmount(numericBudget)}
           </Text>
         )}
 
@@ -300,6 +315,7 @@ export default function Budget() {
                   <Pressable
                     key={option}
                     onPress={() => setBudgetValue(String(option))}
+                    disabled={!isCurrencyReady}
                     className="rounded-xl px-4 py-2"
                     style={{
                       backgroundColor: isSelected ? colors.accent : colors.input,
@@ -312,7 +328,7 @@ export default function Budget() {
                       className="text-sm font-semibold"
                       style={{ color: isSelected ? "#ffffff" : colors.primary }}
                     >
-                      {currency} {option.toLocaleString()}
+                      {currencySymbol ? `${currencySymbol}${option.toLocaleString()}` : "Loading currency…"}
                     </Text>
                   </Pressable>
                 );
@@ -324,6 +340,7 @@ export default function Budget() {
         {(isEditing || numericBudget === 0 || hasInput) && (
           <Pressable
             onPress={handleSave}
+            disabled={!isCurrencyReady}
             className="mt-4 items-center rounded-xl bg-violet-600 py-4"
           >
             <View className="flex-row items-center gap-2">
@@ -344,7 +361,9 @@ export default function Budget() {
           </View>
 
           <Text className="mt-3 text-sm" style={{ color: colors.secondary }}>
-            {currency} {spentAmount.toFixed(2)} spent / {currency} {numericBudget.toFixed(2)}
+            {isCurrencyReady
+              ? `${currencySymbol}${spentAmount.toFixed(2)} spent / ${currencySymbol}${numericBudget.toFixed(2)}`
+              : "Loading currency…"}
           </Text>
 
           <View
@@ -365,7 +384,7 @@ export default function Budget() {
 
           <View className="mt-4">
             <Text className="text-base font-semibold" style={{ color: colors.primary }}>
-              Remaining: {currency} {remainingDisplayAmount.toFixed(2)}
+              Remaining: {isCurrencyReady ? `${currencySymbol}${remainingDisplayAmount.toFixed(2)}` : "Loading currency…"}
             </Text>
             <Text className="mt-2 text-sm font-semibold" style={{ color: healthColor }}>
               {health} spending
@@ -389,7 +408,7 @@ export default function Budget() {
             ) : null}
 
             <Text className="mt-3 text-sm" style={{ color: colors.secondary }}>
-              {`📊 Last month: ${currency} ${lastMonthSpending.toFixed(2)}`}
+              {isCurrencyReady ? `📊 Last month: ${currencySymbol}${lastMonthSpending.toFixed(2)}` : "Loading currency…"}
             </Text>
           </View>
 
@@ -409,7 +428,9 @@ export default function Budget() {
                   className="mt-2 text-sm"
                   style={{ color: colors.secondary }}
                 >
-                  {`${category.name} — ${currency} ${category.amount.toFixed(2)}`}
+                  {isCurrencyReady
+                    ? `${category.name} — ${currencySymbol}${category.amount.toFixed(2)}`
+                    : `${category.name} — Loading currency…`}
                 </Text>
               ))
             )}
