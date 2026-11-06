@@ -1,6 +1,7 @@
 import { useCallback, useContext, useMemo, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import { Dimensions, ScrollView, Text, View } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { PieChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -13,12 +14,21 @@ import {
   VictoryTooltip,
 } from "victory-native";
 import { ExpenseContext } from "../../Context/ExpenseContext";
+import {
+  allocateCurrencyDisplayAmounts,
+  formatCurrencyAmount,
+} from "../../constants/currency";
 import { clearBudget, getBudgetRecord, getExpenses, type ExpenseDocument } from "../../lib/appwrite";
 import { syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
 import {
   aggregateDailyAmounts,
+  aggregateCategorySpending,
+  compareSpendingTotals,
   filterItemsForMonth,
   getCurrentMonthDateKeys,
+  getMonthToDateDateKeys,
+  getPreviousMonthToDateDateKeys,
+  sumAmountsCompensated,
 } from "../../lib/reportDates";
 
 interface TrendPoint {
@@ -40,13 +50,16 @@ export default function Reports() {
   const [expenses, setExpenses] = useState<ExpenseDocument[]>([]);
   const [budget, setBudgetState] = useState<number | null>(null);
   const [monthDateKeys, setMonthDateKeys] = useState(() => getCurrentMonthDateKeys());
+  const [reportNow, setReportNow] = useState(() => new Date());
   const screenWidth = Dimensions.get("window").width;
   const chartWidth = Math.max(screenWidth - 48, 280);
   const pieChartWidth = Math.max(screenWidth - 80, 220);
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
-      setMonthDateKeys(getCurrentMonthDateKeys());
+      const now = new Date();
+      setReportNow(now);
+      setMonthDateKeys(getCurrentMonthDateKeys(now));
 
       const loadReportData = async () => {
         try {
@@ -98,9 +111,25 @@ export default function Reports() {
     [expenses, monthDateKeys]
   );
   const totalExpense = useMemo(
-    () => monthExpenses.reduce((sum, expense) => sum + getExpenseAmount(expense), 0),
+    () => sumAmountsCompensated(monthExpenses.map(getExpenseAmount)),
     [monthExpenses]
   );
+  const categoryBreakdown = useMemo(
+    () => aggregateCategorySpending(monthExpenses, getExpenseAmount),
+    [monthExpenses]
+  );
+  const categoryDisplayAmounts = useMemo(
+    () => allocateCurrencyDisplayAmounts(
+      totalExpense,
+      categoryBreakdown.map(({ amount }) => amount),
+      currency
+    ),
+    [categoryBreakdown, currency, totalExpense]
+  );
+  const highestCategoryAmount = categoryBreakdown[0]?.amount ?? 0;
+  const highestCategories = categoryBreakdown
+    .filter((category) => category.amount === highestCategoryAmount && highestCategoryAmount > 0)
+    .map(({ name }) => name);
   const remainingBudget = budget === null ? null : Math.max(0, budget - totalExpense);
   const budgetUsagePercentage = budget !== null && budget > 0 ? (totalExpense / budget) * 100 : null;
   const convertedTotalExpense = convertFromINR(totalExpense);
@@ -135,6 +164,25 @@ export default function Reports() {
   const dailyTrendData = useMemo<TrendPoint[]>(() => {
     return aggregateDailyAmounts(monthExpenses, getExpenseAmount);
   }, [monthExpenses]);
+
+  const currentComparisonKeys = useMemo(() => getMonthToDateDateKeys(reportNow), [reportNow]);
+  const previousComparisonKeys = useMemo(
+    () => getPreviousMonthToDateDateKeys(reportNow),
+    [reportNow]
+  );
+  const currentComparisonTotal = useMemo(
+    () => filterItemsForMonth(expenses, currentComparisonKeys)
+      .reduce((total, expense) => total + getExpenseAmount(expense), 0),
+    [currentComparisonKeys, expenses]
+  );
+  const previousComparisonTotal = useMemo(
+    () => filterItemsForMonth(expenses, previousComparisonKeys)
+      .reduce((total, expense) => total + getExpenseAmount(expense), 0),
+    [expenses, previousComparisonKeys]
+  );
+  const spendingComparison = compareSpendingTotals(currentComparisonTotal, previousComparisonTotal);
+  const comparisonDifference = spendingComparison.difference;
+  const comparisonPercentChange = spendingComparison.percentChange;
 
   const trendTickValues = useMemo(() => {
     if (dailyTrendData.length <= 5) {
@@ -175,6 +223,28 @@ export default function Reports() {
           : totalExpense === budget
             ? "Your monthly budget has been fully spent."
             : "Your monthly budget is partially spent.";
+
+  const getCategoryIcon = (category: string) => {
+    const normalized = category.trim().toLowerCase();
+    if (normalized.includes("food")) return "food-apple";
+    if (normalized.includes("grocer")) return "cart-outline";
+    if (normalized.includes("transport")) return "bus";
+    if (normalized.includes("travel")) return "airplane";
+    if (normalized.includes("bill")) return "receipt-text-outline";
+    if (normalized.includes("health")) return "heart-pulse";
+    if (normalized.includes("shop")) return "shopping-outline";
+    if (normalized.includes("education")) return "school-outline";
+    if (normalized.includes("entertain")) return "movie-open-outline";
+    return "shape-outline";
+  };
+
+  const formatDateRange = (dateKeys: string[]) => {
+    if (dateKeys.length === 0) return "—";
+    const first = dateKeys[0].split("-").map(Number);
+    const last = dateKeys[dateKeys.length - 1].split("-").map(Number);
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${monthNames[first[1] - 1]} ${first[2]}–${last[2]}, ${first[0]}`;
+  };
 
   return (
     <SafeAreaView className="flex-1" style={{ backgroundColor: colors.screen }}>
@@ -226,6 +296,111 @@ export default function Reports() {
                 : `${budgetUsagePercentage.toFixed(1)}%`}
             </Text>
           </View>
+        </View>
+
+        <View
+          className="mb-4 rounded-2xl border p-4 shadow"
+          style={{ backgroundColor: colors.card, borderColor: colors.border }}
+        >
+          <Text className="mb-3 text-lg font-bold" style={{ color: colors.primary }}>
+            Category Breakdown
+          </Text>
+          {totalExpense <= 0 || categoryBreakdown.length === 0 ? (
+            <Text style={{ color: colors.secondary }}>
+              No category spending recorded this month yet.
+            </Text>
+          ) : (
+            <>
+              <Text className="mb-3 text-sm" style={{ color: colors.secondary }}>
+                Highest spending: {highestCategories.join(", ")} · {formatAmount(highestCategoryAmount)}
+              </Text>
+              <View className="gap-4">
+                {categoryBreakdown.map((category, index) => (
+                  <View key={category.name.toLowerCase()}>
+                    <View className="flex-row items-center justify-between gap-2">
+                      <View className="min-w-0 flex-1 flex-row items-center">
+                        <MaterialCommunityIcons
+                          name={getCategoryIcon(category.name)}
+                          size={18}
+                          color={isDarkMode ? "#93c5fd" : "#2563eb"}
+                        />
+                        <Text
+                          className="ml-2 flex-1 text-sm font-semibold"
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                          style={{ color: colors.primary }}
+                        >
+                          {category.name}
+                        </Text>
+                      </View>
+                      <Text
+                        className="shrink text-right text-sm font-semibold"
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.75}
+                        style={{ color: colors.primary }}
+                      >
+                        {isCurrencyReady
+                          ? formatCurrencyAmount(categoryDisplayAmounts[index] ?? 0, currency)
+                          : "Loading currency…"}
+                      </Text>
+                    </View>
+                    <View className="mt-1 flex-row items-center gap-2">
+                      <View
+                        className="h-2 flex-1 overflow-hidden rounded-full"
+                        style={{ backgroundColor: isDarkMode ? "#1e293b" : "#e2e8f0" }}
+                      >
+                        <View
+                          className="h-full rounded-full bg-blue-600"
+                          style={{ width: `${Math.min(category.percentage, 100)}%` }}
+                        />
+                      </View>
+                      <Text className="w-12 text-right text-xs" style={{ color: colors.secondary }}>
+                        {category.percentage.toFixed(1)}%
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </>
+          )}
+        </View>
+
+        <View
+          className="mb-4 rounded-2xl border p-4 shadow"
+          style={{ backgroundColor: colors.card, borderColor: colors.border }}
+        >
+          <Text className="mb-1 text-lg font-bold" style={{ color: colors.primary }}>
+            Monthly Comparison
+          </Text>
+          <Text className="mb-3 text-xs" style={{ color: colors.secondary }}>
+            Month to date compared with the same elapsed period last month.
+          </Text>
+          <View className="flex-row gap-3">
+            <View className="min-w-0 flex-1 rounded-xl p-3" style={{ backgroundColor: isDarkMode ? "#111827" : "#f1f5f9" }}>
+              <Text className="text-xs font-semibold" style={{ color: colors.secondary }}>
+                This month · {formatDateRange(currentComparisonKeys)}
+              </Text>
+              <Text className="mt-1 text-base font-bold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} style={{ color: colors.primary }}>
+                {formatAmount(currentComparisonTotal)}
+              </Text>
+            </View>
+            <View className="min-w-0 flex-1 rounded-xl p-3" style={{ backgroundColor: isDarkMode ? "#111827" : "#f1f5f9" }}>
+              <Text className="text-xs font-semibold" style={{ color: colors.secondary }}>
+                Last month · {formatDateRange(previousComparisonKeys)}
+              </Text>
+              <Text className="mt-1 text-base font-bold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} style={{ color: colors.primary }}>
+                {formatAmount(previousComparisonTotal)}
+              </Text>
+            </View>
+          </View>
+          <Text className="mt-3 text-sm font-semibold" style={{ color: colors.primary }}>
+            {currentComparisonTotal === 0 && previousComparisonTotal === 0
+              ? "No spending in either comparison period."
+              : previousComparisonTotal === 0
+                ? `Spending increased from zero by ${formatAmount(currentComparisonTotal)}; percentage change is unavailable.`
+                : `${spendingComparison.direction === "increased" ? "Increased" : spendingComparison.direction === "decreased" ? "Decreased" : "Unchanged"} by ${formatAmount(Math.abs(comparisonDifference))}${comparisonPercentChange === null ? "" : ` (${Math.abs(comparisonPercentChange).toFixed(1)}%)`}.`}
+          </Text>
         </View>
 
         <View

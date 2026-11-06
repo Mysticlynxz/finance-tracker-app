@@ -1,12 +1,17 @@
 ﻿import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  aggregateCategorySpending,
   aggregateDailyAmounts,
+  compareSpendingTotals,
   filterItemsForMonth,
   getCalendarMonthKey,
   isBudgetMonthAhead,
   getCalendarDateKey,
   getCurrentMonthDateKeys,
+  getMonthToDateDateKeys,
+  getPreviousMonthToDateDateKeys,
+  sumAmountsCompensated,
 } from "../lib/reportDates.ts";
 
 test("current month day keys use Asia/Kolkata calendar boundaries", () => {
@@ -75,4 +80,107 @@ test("aggregation skips invalid dates and non-finite amounts", () => {
   assert.deepEqual(aggregateDailyAmounts(items, ({ amount }) => amount), [
     { x: "2026-11-01", y: 1.23 },
   ]);
+});
+
+test("category aggregation trims names, groups case-insensitively, and includes uncategorized expenses", () => {
+  const expenses = [
+    { category: " Food ", amount: 75 },
+    { category: "food", amount: 25 },
+    { category: "Bills", amount: 100 },
+    { category: "   ", amount: 50 },
+  ];
+  const categories = aggregateCategorySpending(expenses, ({ amount }) => amount);
+  assert.deepEqual(categories, [
+    { name: "Food", amount: 100, percentage: 40 },
+    { name: "Bills", amount: 100, percentage: 40 },
+    { name: "Uncategorized", amount: 50, percentage: 20 },
+  ]);
+  assert.deepEqual(categories.filter(({ amount }) => amount === categories[0].amount).map(({ name }) => name), ["Food", "Bills"]);
+});
+
+test("zero category total returns zero percentages without division errors", () => {
+  const categories = aggregateCategorySpending(
+    [{ category: "Food", amount: 0 }, { category: " food ", amount: 0 }],
+    ({ amount }) => amount
+  );
+  assert.deepEqual(categories, [{ name: "Food", amount: 0, percentage: 0 }]);
+});
+
+test("category aggregation retains raw sub-cent INR totals and percentages", () => {
+  const categories = aggregateCategorySpending(
+    [
+      { category: "Food", amount: 0.005 },
+      { category: "Travel", amount: 0.005 },
+    ],
+    ({ amount }) => amount
+  );
+  assert.deepEqual(categories, [
+    { name: "Food", amount: 0.005, percentage: 50 },
+    { name: "Travel", amount: 0.005, percentage: 50 },
+  ]);
+});
+
+test("compensated report sums retain small values beside large amounts", () => {
+  assert.equal(sumAmountsCompensated([10_000_000_000_000, 0.05, 0.004]), 10_000_000_000_000.055);
+  const categories = aggregateCategorySpending(
+    [
+      { category: "Food", amount: 10_000_000_000_000 },
+      { category: "food", amount: 0.05 },
+      { category: "Food", amount: 0.004 },
+    ],
+    ({ amount }) => amount
+  );
+  assert.equal(categories[0].amount, 10_000_000_000_000.055);
+});
+
+test("month-to-date periods use matching elapsed days and clamp shorter previous months", () => {
+  const march31 = new Date("2026-03-31T12:00:00+05:30");
+  const current = getMonthToDateDateKeys(march31);
+  const previous = getPreviousMonthToDateDateKeys(march31);
+  assert.equal(current.length, 31);
+  assert.equal(current.at(-1), "2026-03-31");
+  assert.equal(previous.length, 28);
+  assert.equal(previous.at(-1), "2026-02-28");
+
+  const leapMarch31 = new Date("2024-03-31T12:00:00+05:30");
+  assert.equal(getPreviousMonthToDateDateKeys(leapMarch31).length, 29);
+  assert.equal(getPreviousMonthToDateDateKeys(leapMarch31).at(-1), "2024-02-29");
+});
+
+test("month-to-date periods handle December-to-January rollover", () => {
+  const now = new Date("2027-01-05T12:00:00+05:30");
+  assert.deepEqual(getMonthToDateDateKeys(now), [
+    "2027-01-01", "2027-01-02", "2027-01-03", "2027-01-04", "2027-01-05",
+  ]);
+  assert.deepEqual(getPreviousMonthToDateDateKeys(now), [
+    "2026-12-01", "2026-12-02", "2026-12-03", "2026-12-04", "2026-12-05",
+  ]);
+});
+
+test("current and previous month-to-date totals use equivalent Asia/Kolkata dates", () => {
+  const now = new Date("2027-01-05T12:00:00+05:30");
+  const expenses = [
+    { date: "2026-12-04T18:30:00.000Z", amount: 10 },
+    { date: "2027-01-04T18:30:00.000Z", amount: 20 },
+    { date: "2027-01-05T18:29:59.000Z", amount: 30 },
+    { date: "2027-01-05T18:30:00.000Z", amount: 999 },
+  ];
+  const current = filterItemsForMonth(expenses, getMonthToDateDateKeys(now))
+    .reduce((sum, expense) => sum + expense.amount, 0);
+  const previous = filterItemsForMonth(expenses, getPreviousMonthToDateDateKeys(now))
+    .reduce((sum, expense) => sum + expense.amount, 0);
+  assert.equal(current, 50);
+  assert.equal(previous, 10);
+});
+
+test("comparison handles zero prior spending without invalid percentages", () => {
+  assert.deepEqual(compareSpendingTotals(0, 0), {
+    difference: 0, percentChange: null, direction: "unchanged",
+  });
+  assert.deepEqual(compareSpendingTotals(100, 0), {
+    difference: 100, percentChange: null, direction: "increased",
+  });
+  assert.deepEqual(compareSpendingTotals(0, 100), {
+    difference: -100, percentChange: -100, direction: "decreased",
+  });
 });

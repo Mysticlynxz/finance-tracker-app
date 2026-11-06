@@ -4,6 +4,7 @@ import {
   CURRENCY_CONFIG,
   CURRENCY_NAMES,
   SUPPORTED_CURRENCIES,
+  allocateCurrencyDisplayAmounts,
   convertFromINR,
   convertToINR,
   formatCurrencyAmount,
@@ -24,6 +25,103 @@ test("currency conversions are finite and correct for every configured currency"
     assert.equal(toINR, roundToCents(123.45 * rate), `${code} to INR`);
     assert.ok(Number.isFinite(fromINR));
     assert.ok(Number.isFinite(toINR));
+  }
+});
+
+const displayedMinorUnits = (amount, currency) => {
+  const formatted = formatCurrencyAmount(amount, currency);
+  const numeric = Number(formatted.replace(/[^0-9.-]/g, ""));
+  return Math.round(numeric * 100);
+};
+
+test("largest-remainder allocation reconciles three ₹1 categories to the USD total", () => {
+  const allocated = allocateCurrencyDisplayAmounts(3, [1, 1, 1], "USD");
+  assert.deepEqual(allocated, [0.02, 0.01, 0.01]);
+  assert.equal(allocated.reduce((sum, amount) => sum + displayedMinorUnits(amount, "USD"), 0), displayedMinorUnits(convertFromINR(3, "USD"), "USD"));
+});
+
+test("larger fractional remainders receive residual minor units first", () => {
+  const allocated = allocateCurrencyDisplayAmounts(108, [37, 36, 35], "USD");
+  assert.deepEqual(allocated, [0.45, 0.43, 0.42]);
+});
+
+test("equal fractional remainders use stable input-order tie breaking", () => {
+  const allocated = allocateCurrencyDisplayAmounts(111, [37, 37, 37], "USD");
+  assert.deepEqual(allocated, [0.45, 0.45, 0.44]);
+});
+
+test("allocation distributes multiple residual minor units", () => {
+  const amounts = [37, 37, 37];
+  const allocated = allocateCurrencyDisplayAmounts(111, amounts, "USD");
+  assert.equal(allocated.reduce((sum, amount) => sum + displayedMinorUnits(amount, "USD"), 0), displayedMinorUnits(convertFromINR(111, "USD"), "USD"));
+});
+
+test("single and zero spending allocations remain valid", () => {
+  assert.deepEqual(allocateCurrencyDisplayAmounts(100, [100], "USD"), [1.2]);
+  assert.deepEqual(allocateCurrencyDisplayAmounts(0, [0, 0], "USD"), [0, 0]);
+  assert.deepEqual(allocateCurrencyDisplayAmounts(0, [], "USD"), []);
+});
+
+test("sub-cent category totals are allocated from raw amounts without independent rounding", () => {
+  assert.deepEqual(allocateCurrencyDisplayAmounts(0.01, [0.005, 0.005], "INR"), [0.01, 0]);
+  assert.deepEqual(allocateCurrencyDisplayAmounts(0.015, [0.005, 0.005, 0.005], "INR"), [0.01, 0.01, 0]);
+  assert.deepEqual(allocateCurrencyDisplayAmounts(0.01, [0.0049, 0.0051], "INR"), [0, 0.01]);
+});
+
+test("mixed sub-cent and ordinary amounts retain total rounding and stable half-cent ties", () => {
+  assert.deepEqual(allocateCurrencyDisplayAmounts(1.01, [0.005, 1.005], "INR"), [0.01, 1]);
+});
+
+test("reconciles floating-point summation noise but rejects genuine raw-total mismatch", () => {
+  const noisyCategories = [0.1, 0.2];
+  const rounded = allocateCurrencyDisplayAmounts(0.3, noisyCategories, "INR");
+  assert.equal(rounded.reduce((sum, value) => sum + displayedMinorUnits(value, "INR"), 0), 30);
+  assert.throws(
+    () => allocateCurrencyDisplayAmounts(1, [0.4, 0.4], "INR"),
+    /Category INR totals do not reconcile/
+  );
+});
+
+test("rejects a one-paisa reconciliation mismatch even at a trillion rupees", () => {
+  const total = 1_000_000_000_000;
+  const categories = [999_999_999_999.99, ...Array(99).fill(0)];
+  assert.throws(
+    () => allocateCurrencyDisplayAmounts(total, categories, "INR"),
+    /Category INR totals do not reconcile/
+  );
+});
+
+test("larger minor-unit values do not widen local remainder comparisons", () => {
+  const first = 10_000_000_000_000.05;
+  const second = 0.004;
+  const allocated = allocateCurrencyDisplayAmounts(first + second, [first, second], "INR");
+  assert.equal(allocated[0], first);
+  assert.equal(allocated[1], 0.01);
+});
+
+test("category display amounts reconcile to the rounded total in every configured currency", () => {
+  const categoryAmounts = [1, 37, 81, 205.45, 902.13];
+  const total = categoryAmounts.reduce((sum, amount) => sum + amount, 0);
+  for (const currency of SUPPORTED_CURRENCIES) {
+    const allocated = allocateCurrencyDisplayAmounts(total, categoryAmounts, currency);
+    const categorySumMinor = allocated.reduce(
+      (sum, amount) => sum + displayedMinorUnits(amount, currency),
+      0
+    );
+    assert.equal(categorySumMinor, displayedMinorUnits(convertFromINR(total, currency), currency), currency);
+  }
+});
+
+test("sub-cent category allocations reconcile across all configured currencies", () => {
+  const categoryAmounts = [0.005, 0.005, 0.005, 0.005];
+  const total = categoryAmounts.reduce((sum, amount) => sum + amount, 0);
+  for (const currency of SUPPORTED_CURRENCIES) {
+    const allocated = allocateCurrencyDisplayAmounts(total, categoryAmounts, currency);
+    const categorySumMinor = allocated.reduce(
+      (sum, amount) => sum + displayedMinorUnits(amount, currency),
+      0
+    );
+    assert.equal(categorySumMinor, displayedMinorUnits(convertFromINR(total, currency), currency), currency);
   }
 });
 
