@@ -5,6 +5,37 @@
     "endpoint": "https://fra.cloud.appwrite.io/v1",
     "functions": [
         {
+            "$id": "category-budgets",
+            "name": "category-budgets",
+            "runtime": "node-22",
+            "path": "functions/category-budgets",
+            "entrypoint": "index.js",
+            "execute": [
+                "users"
+            ],
+            "enabled": true,
+            "logging": true,
+            "events": [],
+            "schedule": "",
+            "interval": 0,
+            "timeout": 30,
+            "commands": "npm install",
+            "scopes": [
+                "rows.read",
+                "rows.write"
+            ],
+            "installationId": "69a9a78165edda4beaa2",
+            "providerRepositoryId": "1171032706",
+            "providerBranch": "main",
+            "providerSilentMode": false,
+            "providerRootDirectory": "/functions/category-budgets",
+            "providerBranches": [],
+            "providerPaths": [],
+            "buildSpecification": "s-2vcpu-2gb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
+        },
+        {
             "$id": "69a76eab00275ef10835",
             "name": "ai-advisor",
             "runtime": "node-22",

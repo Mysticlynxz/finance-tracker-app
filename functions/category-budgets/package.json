@@ -1,0 +1,13 @@
+{
+  "name": "category-budgets",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/category-budgets.test.js"
+  },
+  "dependencies": {
+    "appwrite": "^22.4.1"
+  }
+}
