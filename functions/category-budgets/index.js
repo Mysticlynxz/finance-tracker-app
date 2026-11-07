@@ -164,13 +164,15 @@ const assertRowsOwned = (rows, userId) => {
   for (const row of rows) assertOwned(row, userId);
 };
 
-const createOrReactivate = async ({ tables, env, userId, category, categoryKey, monthId, amountInINR }) => {
+const createOrReactivate = async ({ tables, env, userId, category, categoryKey, monthId, amountInINR, setStage }) => {
+  setStage("existing_row_lookup");
   const existing = await findTuple({ tables, env, userId, categoryKey, monthId });
   if (existing) {
     assertOwned(existing, userId);
     if (!isDeleted(existing)) {
       throw new HttpError(409, "duplicate_budget", "An active budget already exists for this category and month.");
     }
+    setStage("row_reactivation");
     const row = await tables.updateRow({
       databaseId: env.databaseId,
       tableId: env.tableId,
@@ -183,6 +185,7 @@ const createOrReactivate = async ({ tables, env, userId, category, categoryKey, 
   }
 
   try {
+    setStage("row_creation");
     const row = await tables.createRow({
       databaseId: env.databaseId,
       tableId: env.tableId,
@@ -212,12 +215,13 @@ const createOrReactivate = async ({ tables, env, userId, category, categoryKey, 
   }
 };
 
-const runAction = async ({ body, userId, env, tables, now }) => {
+const runAction = async ({ body, userId, env, tables, now, setStage }) => {
   const monthId = currentMonthId(now());
   const ownerMonthQuery = [Query.equal("userId", userId), Query.equal("monthId", monthId)];
 
   switch (body.action) {
     case "list": {
+      setStage("row_listing");
       const rows = await listRows({ tables, env, queries: ownerMonthQuery });
       assertRowsOwned(rows, userId);
       const ownedRows = rows.filter((row) => row.monthId === monthId && !isDeleted(row));
@@ -225,16 +229,18 @@ const runAction = async ({ body, userId, env, tables, now }) => {
     }
 
     case "create": {
+      setStage("request_validation");
       const { category, categoryKey } = normalizeCategory(body.category);
       const amountInINR = validateAmount(body.amountInINR);
       const requestedMonth = validateCurrentMonth(body.monthId, monthId);
       const result = await createOrReactivate({
-        tables, env, userId, category, categoryKey, monthId: requestedMonth, amountInINR,
+        tables, env, userId, category, categoryKey, monthId: requestedMonth, amountInINR, setStage,
       });
       return { budget: result.row, reactivated: result.reactivated };
     }
 
     case "update": {
+      setStage("row_ownership_lookup");
       const rowId = typeof body.rowId === "string" ? body.rowId.trim() : "";
       if (!rowId) throw new HttpError(400, "invalid_row_id", "rowId is required.");
       const amountInINR = validateAmount(body.amountInINR);
@@ -279,6 +285,7 @@ const runAction = async ({ body, userId, env, tables, now }) => {
     }
 
     case "delete": {
+      setStage("row_ownership_lookup");
       const rowId = typeof body.rowId === "string" ? body.rowId.trim() : "";
       if (!rowId) throw new HttpError(400, "invalid_row_id", "rowId is required.");
       const row = await tables.getRow({ databaseId: env.databaseId, tableId: env.tableId, rowId });
@@ -297,6 +304,7 @@ const runAction = async ({ body, userId, env, tables, now }) => {
     }
 
     case "carry-forward": {
+      setStage("carry_forward_lookup");
       const targetMonthId = validateCurrentMonth(body.monthId, monthId);
       const sourceMonthId = previousMonthId(targetMonthId);
       const sourceRows = await listRows({
@@ -360,36 +368,89 @@ const runAction = async ({ body, userId, env, tables, now }) => {
   }
 };
 
+const safeErrorMessage = (cause, secretValues = []) => {
+  let message = typeof cause?.message === "string" ? cause.message : "Unspecified error";
+  for (const secret of secretValues) {
+    if (secret !== undefined && secret !== null && String(secret).length > 0) {
+      message = message.split(String(secret)).join("[redacted]");
+    }
+  }
+  return message
+    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted-token]")
+    .replace(/(amountInINR|category|categoryKey|userId|rowId|monthId)\s*[:=]\s*[^,;\s]+/gi, "$1=[redacted]");
+};
+
+const getSafeActionName = (action) =>
+  ["list", "create", "update", "delete", "carry-forward"].includes(action) ? action : "unknown";
+
 export const createHandler = ({ env = readEnvironment(), createClientsOverride, now = () => new Date() } = {}) =>
-  async ({ req, res, error = () => {} }) => {
+  async ({ req, res, log = () => {}, error = () => {} }) => {
+    let stage = "request_start";
+    let jwt = "";
+    let body;
+    const diagnostic = (message, details = {}) => log(JSON.stringify({ component: "category-budgets", message, ...details }));
+    const advanceStage = (nextStage) => {
+      stage = nextStage;
+      diagnostic("backend_stage", { stage });
+    };
     try {
+      diagnostic("execution_started", {
+        method: typeof req?.method === "string" ? req.method : "unknown",
+        headers: {
+          userJwtPresent: Boolean(getHeader(req, "x-appwrite-user-jwt")),
+          functionKeyPresent: Boolean(getHeader(req, "x-appwrite-key")),
+          userIdHeaderPresent: Boolean(getHeader(req, "x-appwrite-user-id")),
+        },
+      });
+      advanceStage("request_method_validation");
       if (req?.method && req.method.toUpperCase() !== "POST") {
         throw new HttpError(405, "method_not_allowed", "Use POST for category-budget actions.");
       }
-      const jwt = getHeader(req, "x-appwrite-user-jwt");
+      advanceStage("user_jwt_detection");
+      jwt = getHeader(req, "x-appwrite-user-jwt");
       if (!jwt) throw new HttpError(401, "unauthenticated", "A valid Appwrite user session is required.");
+      advanceStage("client_initialization");
       const clients = createClientsOverride
         ? createClientsOverride(env, jwt)
         : createClients(env, jwt);
       let account;
+      advanceStage("account_verification");
       try {
         account = await clients.account.get();
       } catch {
         throw new HttpError(401, "unauthenticated", "The Appwrite user session is invalid or expired.");
       }
       if (!account?.$id) throw new HttpError(401, "unauthenticated", "The Appwrite user session is invalid.");
-      const body = parseBody(req);
+      diagnostic("account_verified", { verified: true });
+      advanceStage("request_parsing");
+      body = parseBody(req);
+      diagnostic("action_received", { action: getSafeActionName(body.action) });
+      advanceStage("action_dispatch");
       const result = await runAction({
         body,
         userId: account.$id,
         env,
         tables: clients.privilegedTables,
         now,
+        setStage: advanceStage,
       });
+      diagnostic("execution_completed", { action: getSafeActionName(body.action) });
       return res.json({ ok: true, ...result });
     } catch (cause) {
+      const bodySecrets = body && typeof body === "object"
+        ? [...Object.values(body), JSON.stringify(body)]
+        : [];
+      const safeDetails = {
+        stage,
+        name: typeof cause?.name === "string" ? cause.name : "Error",
+        message: safeErrorMessage(cause, [jwt, env.apiKey, ...bodySecrets]),
+        code: cause?.code ?? cause?.status ?? null,
+        type: cause?.type ?? cause?.constructor?.name ?? null,
+      };
+      error(JSON.stringify({ component: "category-budgets", message: "execution_failed", ...safeDetails }));
+      diagnostic("execution_failed", { stage, name: safeDetails.name });
       if (cause instanceof HttpError) return res.json({ ok: false, error: { code: cause.code, message: cause.message } }, cause.status);
-      error("Category budget request failed.");
       return res.json({ ok: false, error: { code: "internal_error", message: "Unable to process category budget request." } }, 500);
     }
   };

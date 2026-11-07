@@ -67,9 +67,11 @@ const invoke = async (body, {
   rows = [],
   now = new Date("2027-01-15T12:00:00.000Z"),
   accountError,
+  tableError,
   method = "POST",
 } = {}) => {
   const store = makeStore(rows);
+  if (tableError) store.tables.listRows = async () => { throw tableError; };
   const handler = createHandler({
     env,
     now: () => new Date(now),
@@ -83,6 +85,7 @@ const invoke = async (body, {
   });
   let response;
   const errors = [];
+  const logs = [];
   await handler({
     req: {
       method,
@@ -91,8 +94,9 @@ const invoke = async (body, {
     },
     res: { json(payload, status = 200) { response = { payload, status }; return response; } },
     error: (message) => errors.push(message),
+    log: (message) => logs.push(message),
   });
-  return { ...response, rows: store.rows, errors };
+  return { ...response, rows: store.rows, errors, logs };
 };
 
 const activeRow = (overrides = {}) => ({
@@ -260,4 +264,35 @@ test("December to January carry-forward reads December and creates January rows"
 test("unknown actions and missing row identifiers are rejected", async () => {
   assert.equal((await invoke({ action: "erase-all" })).status, 400);
   assert.equal((await invoke({ action: "delete" })).status, 400);
+});
+
+test("diagnostics capture failure stage and safe error details without logging secrets or request data", async () => {
+  const requestBody = {
+    action: "create",
+    category: "HiddenFood",
+    amountInINR: 98765,
+    monthId: "2027-01",
+  };
+  const serializedBody = JSON.stringify(requestBody);
+  const result = await invoke(requestBody, {
+    tableError: Object.assign(new Error(`failed ${serializedBody} jwt=valid-jwt key=ephemeral-test-key`), {
+      code: 503,
+      type: "service_unavailable",
+    }),
+  });
+  assert.equal(result.status, 500);
+  assert.equal(result.payload.error.message, "Unable to process category budget request.");
+  assert.ok(result.logs.some((entry) => entry.includes('"action":"create"')));
+  assert.ok(result.logs.some((entry) => entry.includes('"verified":true')));
+  assert.ok(result.logs.some((entry) => entry.includes('"userJwtPresent":true')));
+
+  const failureLog = JSON.parse(result.errors[0]);
+  assert.equal(failureLog.stage, "existing_row_lookup");
+  assert.equal(failureLog.name, "Error");
+  assert.equal(failureLog.code, 503);
+  assert.equal(failureLog.type, "service_unavailable");
+  const allLogs = [...result.logs, ...result.errors].join("\n");
+  for (const secret of ["valid-jwt", "ephemeral-test-key", "HiddenFood", "98765", serializedBody]) {
+    assert.equal(allLogs.includes(secret), false, `must not log ${secret}`);
+  }
 });
