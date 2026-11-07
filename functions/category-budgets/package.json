@@ -8,6 +8,6 @@
     "test": "node --test test/category-budgets.test.js"
   },
   "dependencies": {
-    "appwrite": "^22.4.1"
+    "node-appwrite": "22.1.3"
   }
 }

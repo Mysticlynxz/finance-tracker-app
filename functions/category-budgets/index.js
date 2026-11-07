@@ -6,7 +6,7 @@ import {
   Query,
   Role,
   TablesDB,
-} from "appwrite";
+} from "node-appwrite";
 
 const DEFAULT_DATABASE_ID = "69a4e415003c658fe722";
 const DEFAULT_TABLE_ID = "categoryBudgets";

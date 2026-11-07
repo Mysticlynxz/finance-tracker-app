@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Account, Client, TablesDB } from "node-appwrite";
 import { createClients, createHandler } from "../index.js";
 
 const env = {
@@ -154,6 +155,26 @@ test("initializes separate user and privileged clients from runtime configuratio
     "",
     { ClientClass: MockClient, AccountClass: MockAccount, TablesDBClass: MockTablesDB }
   ), /ephemeral API key is unavailable/);
+});
+
+test("node-appwrite server SDK supports JWT Account auth, API key auth, and TablesDB row methods", () => {
+  const userClient = new Client()
+    .setEndpoint(env.endpoint)
+    .setProject(env.projectId)
+    .setJWT("user-jwt-test");
+  const keyClient = new Client()
+    .setEndpoint(env.endpoint)
+    .setProject(env.projectId)
+    .setKey("ephemeral-key-test");
+  const account = new Account(userClient);
+  const tables = new TablesDB(keyClient);
+
+  assert.equal(typeof userClient.setJWT, "function");
+  assert.equal(typeof keyClient.setKey, "function");
+  assert.equal(typeof account.get, "function");
+  assert.equal(typeof tables.listRows, "function");
+  assert.equal(typeof tables.createRow, "function");
+  assert.equal(typeof tables.updateRow, "function");
 });
 
 test("passes the incoming ephemeral key separately from the user JWT to client initialization", async () => {
