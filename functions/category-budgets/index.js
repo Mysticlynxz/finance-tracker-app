@@ -16,7 +16,6 @@ const CATEGORY_MAX_LENGTH = 128;
 const readEnvironment = () => ({
   endpoint: process.env.APPWRITE_FUNCTION_API_ENDPOINT?.trim(),
   projectId: process.env.APPWRITE_FUNCTION_PROJECT_ID?.trim(),
-  apiKey: process.env.APPWRITE_FUNCTION_API_KEY?.trim(),
   databaseId: process.env.APPWRITE_DATABASE_ID?.trim() || DEFAULT_DATABASE_ID,
   tableId: process.env.APPWRITE_CATEGORY_BUDGETS_TABLE_ID?.trim() || DEFAULT_TABLE_ID,
 });
@@ -55,21 +54,25 @@ class HttpError extends Error {
   }
 }
 
-const createClients = (env, jwt) => {
-  if (!env.endpoint || !env.projectId || !env.apiKey) {
+export const createClients = (env, jwt, functionKey, {
+  ClientClass = Client,
+  AccountClass = Account,
+  TablesDBClass = TablesDB,
+} = {}) => {
+  if (!env.endpoint || !env.projectId || !functionKey) {
     throw new Error("Appwrite Function endpoint, project, or ephemeral API key is unavailable.");
   }
-  const userClient = new Client()
+  const userClient = new ClientClass()
     .setEndpoint(env.endpoint)
     .setProject(env.projectId)
     .setJWT(jwt);
-  const privilegedClient = new Client()
+  const privilegedClient = new ClientClass()
     .setEndpoint(env.endpoint)
     .setProject(env.projectId)
-    .setKey(env.apiKey);
+    .setKey(functionKey);
   return {
-    account: new Account(userClient),
-    privilegedTables: new TablesDB(privilegedClient),
+    account: new AccountClass(userClient),
+    privilegedTables: new TablesDBClass(privilegedClient),
   };
 };
 
@@ -384,10 +387,31 @@ const safeErrorMessage = (cause, secretValues = []) => {
 const getSafeActionName = (action) =>
   ["list", "create", "update", "delete", "carry-forward"].includes(action) ? action : "unknown";
 
+const SAFE_ERROR_CLASSES = new Set([
+  "Error",
+  "AppwriteException",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "ReferenceError",
+  "URIError",
+]);
+
+const getSafeErrorName = (cause) => {
+  const className = cause?.constructor?.name;
+  return SAFE_ERROR_CLASSES.has(className) ? className : "Error";
+};
+
+const getSafeHttpCode = (cause) => {
+  const candidate = Number.isInteger(cause?.code) ? cause.code : cause?.status;
+  return Number.isInteger(candidate) && candidate >= 100 && candidate <= 599 ? candidate : null;
+};
+
 export const createHandler = ({ env = readEnvironment(), createClientsOverride, now = () => new Date() } = {}) =>
   async ({ req, res, log = () => {}, error = () => {} }) => {
     let stage = "request_start";
     let jwt = "";
+    let functionKey = "";
     let body;
     const diagnostic = (message, details = {}) => log(JSON.stringify({ component: "category-budgets", message, ...details }));
     const advanceStage = (nextStage) => {
@@ -410,10 +434,11 @@ export const createHandler = ({ env = readEnvironment(), createClientsOverride, 
       advanceStage("user_jwt_detection");
       jwt = getHeader(req, "x-appwrite-user-jwt");
       if (!jwt) throw new HttpError(401, "unauthenticated", "A valid Appwrite user session is required.");
+      functionKey = getHeader(req, "x-appwrite-key");
       advanceStage("client_initialization");
       const clients = createClientsOverride
-        ? createClientsOverride(env, jwt)
-        : createClients(env, jwt);
+        ? createClientsOverride(env, jwt, functionKey)
+        : createClients(env, jwt, functionKey);
       let account;
       advanceStage("account_verification");
       try {
@@ -443,10 +468,9 @@ export const createHandler = ({ env = readEnvironment(), createClientsOverride, 
         : [];
       const safeDetails = {
         stage,
-        name: typeof cause?.name === "string" ? cause.name : "Error",
-        message: safeErrorMessage(cause, [jwt, env.apiKey, ...bodySecrets]),
-        code: cause?.code ?? cause?.status ?? null,
-        type: cause?.type ?? cause?.constructor?.name ?? null,
+        name: getSafeErrorName(cause),
+        message: safeErrorMessage(cause, [jwt, functionKey, ...bodySecrets]),
+        code: getSafeHttpCode(cause),
       };
       error(JSON.stringify({ component: "category-budgets", message: "execution_failed", ...safeDetails }));
       diagnostic("execution_failed", { stage, name: safeDetails.name });

@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHandler } from "../index.js";
+import { createClients, createHandler } from "../index.js";
 
 const env = {
   endpoint: "https://appwrite.test/v1",
   projectId: "project-test",
-  apiKey: "ephemeral-test-key",
   databaseId: "database-test",
   tableId: "categoryBudgets",
 };
@@ -64,6 +63,7 @@ const makeStore = (initialRows = []) => {
 const invoke = async (body, {
   userId = "user-a",
   jwt = "valid-jwt",
+  functionKey = "ephemeral-test-key",
   rows = [],
   now = new Date("2027-01-15T12:00:00.000Z"),
   accountError,
@@ -89,7 +89,10 @@ const invoke = async (body, {
   await handler({
     req: {
       method,
-      headers: jwt ? { "x-appwrite-user-jwt": jwt } : {},
+      headers: {
+        ...(jwt ? { "x-appwrite-user-jwt": jwt } : {}),
+        ...(functionKey ? { "x-appwrite-key": functionKey } : {}),
+      },
       body: JSON.stringify(body),
     },
     res: { json(payload, status = 200) { response = { payload, status }; return response; } },
@@ -116,6 +119,57 @@ test("rejects missing, invalid, and expired user JWTs", async () => {
   assert.equal(missing.status, 401);
   const invalid = await invoke({ action: "list" }, { accountError: new Error("invalid jwt") });
   assert.equal(invalid.status, 401);
+});
+
+test("initializes separate user and privileged clients from runtime configuration and request credentials", () => {
+  const calls = [];
+  class MockClient {
+    setEndpoint(value) { calls.push(["endpoint", value]); return this; }
+    setProject(value) { calls.push(["project", value]); return this; }
+    setJWT(value) { calls.push(["jwt", value]); return this; }
+    setKey(value) { calls.push(["key", value]); return this; }
+  }
+  class MockAccount { constructor(client) { this.client = client; } }
+  class MockTablesDB { constructor(client) { this.client = client; } }
+
+  const clients = createClients(
+    { endpoint: "https://runtime.test/v1", projectId: "runtime-project" },
+    "user-session-jwt",
+    "request-ephemeral-key",
+    { ClientClass: MockClient, AccountClass: MockAccount, TablesDBClass: MockTablesDB }
+  );
+  assert.ok(clients.account instanceof MockAccount);
+  assert.ok(clients.privilegedTables instanceof MockTablesDB);
+  assert.deepEqual(calls, [
+    ["endpoint", "https://runtime.test/v1"],
+    ["project", "runtime-project"],
+    ["jwt", "user-session-jwt"],
+    ["endpoint", "https://runtime.test/v1"],
+    ["project", "runtime-project"],
+    ["key", "request-ephemeral-key"],
+  ]);
+  assert.throws(() => createClients(
+    { endpoint: "https://runtime.test/v1", projectId: "runtime-project" },
+    "user-session-jwt",
+    "",
+    { ClientClass: MockClient, AccountClass: MockAccount, TablesDBClass: MockTablesDB }
+  ), /ephemeral API key is unavailable/);
+});
+
+test("passes the incoming ephemeral key separately from the user JWT to client initialization", async () => {
+  let received;
+  const handler = createHandler({
+    env,
+    createClientsOverride: (_env, jwt, functionKey) => {
+      received = { jwt, functionKey };
+      return { account: { get: async () => ({ $id: "user-a" }) }, privilegedTables: makeStore().tables };
+    },
+  });
+  await handler({
+    req: { method: "POST", headers: { "x-appwrite-user-jwt": "user-jwt-value", "x-appwrite-key": "function-key-value" }, body: JSON.stringify({ action: "list" }) },
+    res: { json: (payload, status = 200) => ({ payload, status }) },
+  });
+  assert.deepEqual(received, { jwt: "user-jwt-value", functionKey: "function-key-value" });
 });
 
 test("rejects unsupported methods and malformed requests", async () => {
@@ -290,9 +344,58 @@ test("diagnostics capture failure stage and safe error details without logging s
   assert.equal(failureLog.stage, "existing_row_lookup");
   assert.equal(failureLog.name, "Error");
   assert.equal(failureLog.code, 503);
-  assert.equal(failureLog.type, "service_unavailable");
+  assert.equal("type" in failureLog, false);
   const allLogs = [...result.logs, ...result.errors].join("\n");
   for (const secret of ["valid-jwt", "ephemeral-test-key", "HiddenFood", "98765", serializedBody]) {
     assert.equal(allLogs.includes(secret), false, `must not log ${secret}`);
+  }
+});
+
+test("failure metadata only logs allowlisted class names and valid numeric HTTP codes", async () => {
+  const cases = [
+    {
+      cause: Object.assign(new Error("lookup failed"), {
+        name: "name-contains-user-jwt-value",
+        code: "ephemeral-test-key",
+        type: "valid-jwt",
+      }),
+      expectedName: "Error",
+      expectedCode: null,
+    },
+    {
+      cause: Object.assign(new Error("lookup failed"), {
+        name: "custom credential details",
+        code: { token: "valid-jwt" },
+        status: 502,
+        type: { key: "ephemeral-test-key" },
+      }),
+      expectedName: "Error",
+      expectedCode: 502,
+    },
+    {
+      cause: Object.assign(new TypeError("lookup failed"), { code: 503, type: "arbitrary metadata" }),
+      expectedName: "TypeError",
+      expectedCode: 503,
+    },
+    {
+      cause: Object.assign(new Error("lookup failed"), { code: 99, status: 600, type: "secret" }),
+      expectedName: "Error",
+      expectedCode: null,
+    },
+  ];
+
+  for (const { cause, expectedName, expectedCode } of cases) {
+    const result = await invoke({ action: "create", category: "PrivateCategory", amountInINR: 45, monthId: "2027-01" }, { tableError: cause });
+    assert.equal(result.status, 500);
+    assert.equal(result.payload.error.message, "Unable to process category budget request.");
+    const logged = JSON.parse(result.errors[0]);
+    assert.equal(logged.stage, "existing_row_lookup");
+    assert.equal(logged.name, expectedName);
+    assert.equal(logged.code, expectedCode);
+    assert.equal("type" in logged, false);
+    const allLogs = [...result.logs, ...result.errors].join("\n");
+    for (const secret of ["valid-jwt", "ephemeral-test-key", "PrivateCategory", "45"]) {
+      assert.equal(allLogs.includes(secret), false, `must not log ${secret}`);
+    }
   }
 });
