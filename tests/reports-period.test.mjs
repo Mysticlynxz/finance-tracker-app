@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   aggregateCategorySpending,
   aggregateDailyAmounts,
+  aggregateSpendingForMonth,
   compareSpendingTotals,
   filterItemsForMonth,
   getCalendarMonthKey,
@@ -11,6 +12,9 @@ import {
   getCurrentMonthDateKeys,
   getMonthToDateDateKeys,
   getPreviousMonthToDateDateKeys,
+  getPreviousCompletedMonthDateKeys,
+  getHistoricalBudgetRecommendation,
+  getRecentCompletedMonthDateKeys,
   sumAmountsCompensated,
 } from "../lib/reportDates.ts";
 
@@ -131,6 +135,65 @@ test("compensated report sums retain small values beside large amounts", () => {
     ({ amount }) => amount
   );
   assert.equal(categories[0].amount, 10_000_000_000_000.055);
+});
+
+test("monthly spending aggregation includes only the Asia/Kolkata calendar month", () => {
+  const expenses = [
+    { date: "2026-10-31T18:29:59.000Z", amount: 100 },
+    { date: "2026-10-31T18:30:00.000Z", amount: 25 },
+    { date: "2026-11-15T10:00:00.000Z", amount: 50 },
+    { date: "2026-11-30T18:30:00.000Z", amount: 900 },
+  ];
+  const monthly = aggregateSpendingForMonth(
+    expenses,
+    ({ amount }) => amount,
+    getCurrentMonthDateKeys(new Date("2026-11-15T12:00:00+05:30"))
+  );
+  assert.deepEqual(monthly.items.map(({ amount }) => amount), [25, 50]);
+  assert.equal(monthly.total, 75);
+});
+
+test("completed month keys handle December rollover and leap February", () => {
+  assert.equal(getPreviousCompletedMonthDateKeys(new Date("2027-01-03T12:00:00+05:30"))[0], "2026-12-01");
+  assert.equal(getPreviousCompletedMonthDateKeys(new Date("2027-01-03T12:00:00+05:30")).at(-1), "2026-12-31");
+  const march = getPreviousCompletedMonthDateKeys(new Date("2024-03-15T12:00:00+05:30"));
+  assert.equal(march.length, 29);
+  assert.equal(march.at(-1), "2024-02-29");
+  assert.equal(getRecentCompletedMonthDateKeys(3, new Date("2027-01-15T12:00:00+05:30"))[2][0], "2026-10-01");
+});
+
+test("recommendation averages only completed months with expense history and adds 10 percent", () => {
+  const expenses = [
+    { date: "2026-10-02", amount: 1000 },
+    { date: "2026-12-10", amount: 3000 },
+    { date: "2027-01-02", amount: 9000 },
+    { date: "2026-09-15", amount: 7000 },
+  ];
+  assert.deepEqual(
+    getHistoricalBudgetRecommendation(expenses, ({ amount }) => amount, new Date("2027-01-15T12:00:00+05:30")),
+    {
+      monthsWithHistory: 2,
+      averageMonthlySpendingInINR: 2000,
+      recommendedBudgetInINR: 2200,
+    }
+  );
+});
+
+test("recommendation explains sparse history without treating empty months as zero", () => {
+  const now = new Date("2027-01-15T12:00:00+05:30");
+  const noHistory = getHistoricalBudgetRecommendation([], ({ amount }) => amount, now);
+  assert.deepEqual(noHistory, {
+    monthsWithHistory: 0,
+    averageMonthlySpendingInINR: null,
+    recommendedBudgetInINR: null,
+  });
+  const oneMonth = getHistoricalBudgetRecommendation(
+    [{ date: "2026-11-03", amount: 500 }],
+    ({ amount }) => amount,
+    now
+  );
+  assert.equal(oneMonth.monthsWithHistory, 1);
+  assert.equal(oneMonth.recommendedBudgetInINR, 550);
 });
 
 test("month-to-date periods use matching elapsed days and clamp shorter previous months", () => {

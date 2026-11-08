@@ -42,6 +42,33 @@ export const getCurrentMonthDateKeys = (now = new Date()): string[] => {
   );
 };
 
+export const getPreviousCompletedMonthDateKeys = (now = new Date()): string[] => {
+  const [year, month] = getCalendarMonthKey(now).split("-").map(Number);
+  const previousMonth = new Date(Date.UTC(year, month - 2, 1));
+  const previousYear = previousMonth.getUTCFullYear();
+  const previousMonthNumber = previousMonth.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(previousYear, previousMonthNumber, 0)).getUTCDate();
+
+  return Array.from({ length: lastDay }, (_, index) =>
+    `${previousYear}-${String(previousMonthNumber).padStart(2, "0")}-${String(index + 1).padStart(2, "0")}`
+  );
+};
+
+export const getRecentCompletedMonthDateKeys = (count: number, now = new Date()): string[][] => {
+  if (!Number.isInteger(count) || count <= 0) return [];
+  const [year, month] = getCalendarMonthKey(now).split("-").map(Number);
+
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(year, month - 2 - index, 1));
+    const monthYear = date.getUTCFullYear();
+    const monthNumber = date.getUTCMonth() + 1;
+    const lastDay = new Date(Date.UTC(monthYear, monthNumber, 0)).getUTCDate();
+    return Array.from({ length: lastDay }, (_, dayIndex) =>
+      `${monthYear}-${String(monthNumber).padStart(2, "0")}-${String(dayIndex + 1).padStart(2, "0")}`
+    );
+  });
+};
+
 export const getMonthToDateDateKeys = (now = new Date()): string[] => {
   const todayKey = getCalendarDateKey(now);
   if (!todayKey) return [];
@@ -108,6 +135,55 @@ export const sumAmountsCompensated = (amounts: number[]): number => {
   }
 
   return sum + correction;
+};
+
+export const aggregateSpendingForMonth = <T extends { date: string }>(
+  items: T[],
+  getAmount: (item: T) => number,
+  monthDateKeys: string[]
+) => {
+  const monthItems = filterItemsForMonth(items, monthDateKeys);
+  const total = sumAmountsCompensated(monthItems
+    .map(getAmount)
+    .filter((amount) => Number.isFinite(amount)));
+  return { items: monthItems, total };
+};
+
+export interface HistoricalBudgetRecommendation {
+  monthsWithHistory: number;
+  averageMonthlySpendingInINR: number | null;
+  recommendedBudgetInINR: number | null;
+}
+
+export const getHistoricalBudgetRecommendation = <T extends { date: string }>(
+  expenses: T[],
+  getAmount: (expense: T) => number,
+  now = new Date(),
+  monthsToConsider = 3
+): HistoricalBudgetRecommendation => {
+  const monthlyTotals = getRecentCompletedMonthDateKeys(monthsToConsider, now)
+    .map((monthKeys) => {
+      const validAmounts = aggregateSpendingForMonth(expenses, getAmount, monthKeys).items
+        .map(getAmount)
+        .filter((amount) => Number.isFinite(amount) && amount > 0);
+      return validAmounts.length > 0 ? sumAmountsCompensated(validAmounts) : null;
+    })
+    .filter((amount): amount is number => amount !== null);
+
+  if (monthlyTotals.length === 0) {
+    return {
+      monthsWithHistory: 0,
+      averageMonthlySpendingInINR: null,
+      recommendedBudgetInINR: null,
+    };
+  }
+
+  const averageMonthlySpendingInINR = sumAmountsCompensated(monthlyTotals) / monthlyTotals.length;
+  return {
+    monthsWithHistory: monthlyTotals.length,
+    averageMonthlySpendingInINR,
+    recommendedBudgetInINR: averageMonthlySpendingInINR * 1.1,
+  };
 };
 
 export interface CategorySpending {

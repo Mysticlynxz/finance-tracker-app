@@ -3,8 +3,9 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import { ExpenseContext } from "../../Context/ExpenseContext";
 import { CURRENCY_CONFIG, normalizeCurrencyCode } from "../../constants/currency";
+import { DEFAULT_CATEGORIES, type CategoryOption } from "../../constants/categories";
 import { router } from "expo-router";
-import { Alert, Animated, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Animated, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   clearBudget,
@@ -14,6 +15,30 @@ import {
   type ExpenseDocument,
 } from "../../lib/appwrite";
 import { markCurrentBudgetMonth, syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
+import { getCategories } from "../../lib/categoryService";
+import { getCategorySourceErrorMessage, loadCategorySource } from "../../lib/categoryBudgetLoading";
+import {
+  aggregateSpendingForMonth,
+  getCalendarMonthKey,
+  getCurrentMonthDateKeys,
+  getHistoricalBudgetRecommendation,
+  getPreviousCompletedMonthDateKeys,
+} from "../../lib/reportDates";
+import {
+  createCategoryBudget,
+  carryForwardCategoryBudgets,
+  deleteCategoryBudget,
+  listCategoryBudgets,
+  updateCategoryBudget,
+  type CategoryBudget,
+} from "../../lib/categoryBudgets";
+import {
+  aggregateCategoryBudgetSpending,
+  buildAvailableCategoryOptions,
+  calculateCategoryBudgetProgress,
+  categoryLimitsExceedOverallBudget,
+  normalizeCategoryKey,
+} from "../../lib/categoryBudgetCalculations";
 
 const QUICK_BUDGET_OPTIONS = [10000, 20000, 50000] as const;
 const formatBudgetInputValue = (amount: number) => {
@@ -38,10 +63,35 @@ export default function Budget() {
   const [budget, setBudgetValue] = useState("");
   const [isEditing, setIsEditing] = useState(true);
   const [savedBudgetInINR, setSavedBudgetInINR] = useState<number>(0);
-  const [spentAmountInINR, setSpentAmountInINR] = useState<number>(0);
   const [expenses, setExpenses] = useState<ExpenseDocument[]>([]);
+  const [categoryBudgets, setCategoryBudgets] = useState<CategoryBudget[]>([]);
+  const [categoryBudgetsLoading, setCategoryBudgetsLoading] = useState(true);
+  const [categoryBudgetsError, setCategoryBudgetsError] = useState("");
+  const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
+  const [customCategoriesLoading, setCustomCategoriesLoading] = useState(true);
+  const [customCategoriesError, setCustomCategoriesError] = useState("");
+  const customCategoriesRequestId = useRef(0);
+  const [isCategoryPickerVisible, setIsCategoryPickerVisible] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<CategoryOption | null>(null);
+  const [categoryLimitInput, setCategoryLimitInput] = useState("");
+  const [categoryBusy, setCategoryBusy] = useState(false);
   const [budgetCycleMessage, setBudgetCycleMessage] = useState("");
   const animatedWidth = useRef(new Animated.Value(0)).current;
+
+  const loadCustomCategories = useCallback(async () => {
+    const requestId = ++customCategoriesRequestId.current;
+    setCustomCategoriesLoading(true);
+    const result = await loadCategorySource(getCategories);
+    if (requestId === customCategoriesRequestId.current) {
+      if (result.ok) {
+        setCustomCategories(result.value.map(({ name, icon }) => ({ name, icon })));
+        setCustomCategoriesError("");
+      } else {
+        setCustomCategoriesError(getCategorySourceErrorMessage(result.error, "Unable to load custom categories."));
+      }
+      setCustomCategoriesLoading(false);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -60,9 +110,6 @@ export default function Budget() {
               clearBudget
             );
             const nextSavedBudget = activeBudget ?? 0;
-            setSpentAmountInINR(
-              expensesFromDb.reduce((total, expense) => total + Number(expense.amount || 0), 0)
-            );
             setExpenses(expensesFromDb);
             setSavedBudgetInINR(nextSavedBudget);
             setBudgetLocal(nextSavedBudget);
@@ -79,10 +126,31 @@ export default function Budget() {
 
       void loadBudgetData();
 
+      const loadCategoryBudgets = async () => {
+        setCategoryBudgetsLoading(true);
+        const result = await loadCategorySource(async () => {
+          await carryForwardCategoryBudgets(getCalendarMonthKey());
+          return listCategoryBudgets();
+        });
+        if (isActive) {
+          if (result.ok) {
+            setCategoryBudgets(result.value.budgets.filter((item) => item.monthId === getCalendarMonthKey()));
+            setCategoryBudgetsError("");
+          } else {
+            setCategoryBudgetsError(getCategorySourceErrorMessage(result.error, "Unable to load category limits."));
+          }
+          setCategoryBudgetsLoading(false);
+        }
+      };
+      void loadCategoryBudgets();
+
+      void loadCustomCategories();
+
       return () => {
         isActive = false;
+        customCategoriesRequestId.current += 1;
       };
-    }, [convertFromINR, setBudgetLocal])
+    }, [convertFromINR, loadCustomCategories, setBudgetLocal])
   );
   const colors = isDarkMode
     ? {
@@ -126,14 +194,27 @@ export default function Budget() {
     currencySymbol ? `${currencySymbol}${amount.toFixed(2)}` : "Loading currency…";
   const hasInput = budget.trim().length > 0;
   const hasSavedBudget = savedBudgetInINR > 0;
+  const now = new Date();
+  const getExpenseAmount = (expense: ExpenseDocument) => {
+    const amount = Number(expense.amount);
+    return Number.isFinite(amount) && amount > 0 ? amount : 0;
+  };
+  const currentMonthSpending = aggregateSpendingForMonth(expenses, getExpenseAmount, getCurrentMonthDateKeys(now));
+  const currentMonthExpenses = currentMonthSpending.items;
+  const spentAmountInINR = currentMonthSpending.total;
   const spentAmount = convertFromINR(spentAmountInINR);
-  const suggestedBudget = Math.round(spentAmount * 1.5);
+  const historicalRecommendation = getHistoricalBudgetRecommendation(expenses, getExpenseAmount, now, 3);
+  const lastMonthSpendingInINR = aggregateSpendingForMonth(
+    expenses,
+    getExpenseAmount,
+    getPreviousCompletedMonthDateKeys(now)
+  ).total;
+  const lastMonthSpending = convertFromINR(lastMonthSpendingInINR);
   const remaining = numericBudget - spentAmount;
   const remainingDisplayAmount = remaining > 0 ? remaining : 0;
   const progress = numericBudget > 0 ? spentAmount / numericBudget : 0;
   const usagePercent = numericBudget > 0 ? (spentAmount / numericBudget) * 100 : 0;
   const selectedQuickBudget = QUICK_BUDGET_OPTIONS.find((option) => option === numericBudget);
-  const lastMonthSpending = convertFromINR(18000);
   const smartAlertMessage =
     numericBudget <= 0
       ? ""
@@ -143,10 +224,12 @@ export default function Budget() {
           ? "You've used 80% of your budget"
           : "";
 
-  let health = "Healthy";
+  let health = numericBudget > 0 ? "Healthy" : "No budget set";
   let healthColor = "#16a34a";
 
-  if (usagePercent > 80) {
+  if (numericBudget <= 0) {
+    healthColor = colors.secondary;
+  } else if (usagePercent > 80) {
     health = "Overspending";
     healthColor = "#dc2626";
   } else if (usagePercent > 50) {
@@ -154,23 +237,64 @@ export default function Budget() {
     healthColor = "#d97706";
   }
 
-  const categoryTotals = expenses.reduce<Record<string, number>>((accumulator, expense) => {
-    const key =
-      typeof expense.category === "string" && expense.category.trim()
-        ? expense.category.trim()
-        : "Other";
+  const groupedCategorySpending = aggregateCategoryBudgetSpending(
+    currentMonthExpenses,
+    (expense) => expense.category,
+    getExpenseAmount
+  );
+  const allCategories = groupedCategorySpending
+    .map(({ name, amountInINR }) => ({ name, amount: convertFromINR(amountInINR) }))
+    .sort((left, right) => right.amount - left.amount);
+  const categories = allCategories.slice(0, 3);
 
-    accumulator[key] = (accumulator[key] ?? 0) + Number(expense.amount || 0);
-    return accumulator;
-  }, {});
+  const categorySpending = new Map(groupedCategorySpending.map(({ key, amountInINR }) => [key, amountInINR]));
+  const availableCategoryOptions = buildAvailableCategoryOptions(
+    DEFAULT_CATEGORIES,
+    customCategories,
+    categoryBudgets.map((item) => item.categoryKey)
+  );
+  const saveCategoryLimit = async (existing?: CategoryBudget) => {
+    if (!isCurrencyReady || categoryBusy) return;
+    const name = (existing?.category ?? selectedCategory?.name ?? "").trim();
+    const selectedAmount = Number(existing ? categoryLimitInput : categoryLimitInput);
+    if (!name || !Number.isFinite(selectedAmount) || selectedAmount <= 0) {
+      Alert.alert("Invalid category limit", "Enter a category and an amount greater than zero.");
+      return;
+    }
+    setCategoryBusy(true);
+    try {
+      const amountInINR = convertToINR(selectedAmount);
+      if (!Number.isFinite(amountInINR) || amountInINR <= 0) throw new Error("Amount cannot be safely converted to INR.");
+      if (existing) {
+        await updateCategoryBudget(existing.$id, amountInINR);
+      } else {
+        await createCategoryBudget(name, amountInINR, getCalendarMonthKey());
+        setSelectedCategory(null);
+        setIsCategoryPickerVisible(false);
+      }
+      const result = await listCategoryBudgets();
+      setCategoryBudgets(result.budgets.filter((item) => item.monthId === getCalendarMonthKey()));
+      setCategoryLimitInput("");
+      setCategoryBudgetsError("");
+    } catch (error) {
+      Alert.alert("Category limit not saved", error instanceof Error ? error.message : "Please try again.");
+    } finally {
+      setCategoryBusy(false);
+    }
+  };
 
-  const categories = Object.entries(categoryTotals)
-    .map(([name, amount]) => ({
-      name,
-      amount: convertFromINR(amount),
-    }))
-    .sort((left, right) => right.amount - left.amount)
-    .slice(0, 3);
+  const removeCategoryLimit = async (item: CategoryBudget) => {
+    if (categoryBusy) return;
+    setCategoryBusy(true);
+    try {
+      await deleteCategoryBudget(item.$id);
+      setCategoryBudgets((current) => current.filter((budgetItem) => budgetItem.$id !== item.$id));
+    } catch (error) {
+      Alert.alert("Category limit not removed", error instanceof Error ? error.message : "Please try again.");
+    } finally {
+      setCategoryBusy(false);
+    }
+  };
 
   useEffect(() => {
     const targetWidth = Math.min(progress * 100, 100);
@@ -246,9 +370,11 @@ export default function Budget() {
             Define your monthly spending limits
           </Text>
           <Text className="mt-2 text-sm font-medium" style={{ color: colors.secondary }}>
-            {isCurrencyReady
-              ? `🤖 Suggested budget: ${currencySymbol}${suggestedBudget.toLocaleString()}`
-              : "Loading currency…"}
+            {!isCurrencyReady
+              ? "Loading currency…"
+              : historicalRecommendation.recommendedBudgetInINR === null
+                ? "Add expenses in completed months to get a budget recommendation."
+                : `Suggested budget: ${formatAmount(historicalRecommendation.recommendedBudgetInINR)} (average of ${historicalRecommendation.monthsWithHistory} completed month${historicalRecommendation.monthsWithHistory === 1 ? "" : "s"} + 10% cushion).${historicalRecommendation.monthsWithHistory < 3 ? " Based on limited history." : ""}`}
           </Text>
         </View>
       </View>
@@ -392,7 +518,7 @@ export default function Budget() {
               Remaining: {isCurrencyReady ? `${currencySymbol}${remainingDisplayAmount.toFixed(2)}` : "Loading currency…"}
             </Text>
             <Text className="mt-2 text-sm font-semibold" style={{ color: healthColor }}>
-              {health} spending
+              {numericBudget > 0 ? `${health} spending` : "Set a budget to see spending status"}
             </Text>
 
             {numericBudget > 0 && remaining < 0 && (
@@ -442,6 +568,158 @@ export default function Budget() {
           </View>
         </View>
       </View>
+
+      <View className="mt-5 rounded-2xl border p-4" style={{ backgroundColor: colors.card, borderColor: colors.border }}>
+        <Text className="text-lg font-bold" style={{ color: colors.primary }}>Category limits</Text>
+        <Text className="mt-1 text-sm" style={{ color: colors.secondary }}>Optional monthly sublimits. Amounts are stored in INR.</Text>
+        {!isCurrencyReady ? <Text className="mt-3" style={{ color: colors.secondary }}>Loading currency…</Text> : null}
+        {categoryBudgetsLoading ? <Text className="mt-3" style={{ color: colors.secondary }}>Loading category limits…</Text> : null}
+        {categoryBudgetsError ? <Text className="mt-3" style={{ color: colors.warningText }}>{categoryBudgetsError}</Text> : null}
+        {customCategoriesError ? (
+          <View className="mt-3 rounded-xl border p-3" style={{ borderColor: colors.warningText, backgroundColor: colors.warningBg }}>
+            <Text className="text-sm" style={{ color: colors.warningText }}>Custom categories could not be loaded. Built-in categories are still available.</Text>
+            <Pressable accessibilityRole="button" disabled={customCategoriesLoading} onPress={() => void loadCustomCategories()} className="mt-2 items-center justify-center rounded-lg border px-3" style={{ borderColor: colors.warningText, minHeight: 48, opacity: customCategoriesLoading ? 0.5 : 1 }}>
+              <Text className="font-semibold" style={{ color: colors.warningText }}>Retry custom categories</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {!categoryBudgetsLoading && !categoryBudgetsError && allCategories.length === 0 && categoryBudgets.length === 0 ? (
+          <Text className="mt-3" style={{ color: colors.secondary }}>No category spending yet. You can still create a limit below.</Text>
+        ) : null}
+
+        {allCategories.map((category) => {
+          const categoryKey = normalizeCategoryKey(category.name) || "uncategorized";
+          const limit = categoryBudgets.find((item) => item.categoryKey === categoryKey);
+          const spentInINR = categorySpending.get(categoryKey) ?? 0;
+          const progressData = calculateCategoryBudgetProgress(spentInINR, limit?.amountInINR);
+          const ratio = progressData.usagePercent === null ? 0 : progressData.usagePercent / 100;
+          return (
+            <View key={category.name} className="mt-4 rounded-xl border p-3" style={{ borderColor: colors.border }}>
+              <View className="flex-row items-center justify-between gap-2">
+                <Text numberOfLines={1} className="flex-1 font-semibold" style={{ color: colors.primary }}>{category.name}</Text>
+                <Text className="text-xs" style={{ color: colors.secondary }}>{formatAmount(spentInINR)} spent</Text>
+              </View>
+              {limit ? (
+                <>
+                  <Text className="mt-2 text-sm" style={{ color: colors.secondary }}>Limit {formatAmount(limit.amountInINR)} · Remaining {formatAmount(Math.max(0, limit.amountInINR - spentInINR))}</Text>
+                  <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>{Math.round(ratio * 100)}% used{ratio > 1 ? " · Over limit" : ""}</Text>
+                  <View className="mt-2 h-2 overflow-hidden rounded-full" style={{ backgroundColor: colors.progressTrack }}>
+                    <View style={{ height: 8, width: `${Math.min(ratio * 100, 100)}%`, backgroundColor: ratio > 1 ? colors.warningText : colors.progressFill }} />
+                  </View>
+                  <TextInput value={categoryLimitInput} onChangeText={setCategoryLimitInput} placeholder={isCurrencyReady ? `New limit (${currency})` : "Loading currency…"} keyboardType="decimal-pad" editable={isCurrencyReady && !categoryBusy} className="mt-3 w-full rounded-lg border px-3 py-3 text-base" style={{ color: colors.primary, borderColor: colors.border, minHeight: 48 }} />
+                  <View className="mt-2 flex-row gap-2">
+                    <Pressable disabled={!isCurrencyReady || categoryBusy} onPress={() => void saveCategoryLimit(limit)} className="flex-1 items-center justify-center rounded-lg border px-3 py-3" style={{ borderColor: colors.border, minHeight: 48, opacity: !isCurrencyReady || categoryBusy ? 0.5 : 1 }}><Text className="text-sm font-semibold" style={{ color: colors.accent }}>Update</Text></Pressable>
+                    <Pressable disabled={categoryBusy} onPress={() => void removeCategoryLimit(limit)} className="flex-1 items-center justify-center rounded-lg border px-3 py-3" style={{ borderColor: colors.border, minHeight: 48, opacity: categoryBusy ? 0.5 : 1 }}><Text className="text-sm font-semibold" style={{ color: colors.warningText }}>Remove</Text></Pressable>
+                  </View>
+                </>
+              ) : (
+                <View className="mt-2 flex-row items-center justify-between">
+                  <Text className="text-sm" style={{ color: colors.secondary }}>No limit set</Text>
+                  <Pressable onPress={() => {
+                    const option = [...DEFAULT_CATEGORIES, ...customCategories].find((item) => normalizeCategoryKey(item.name) === categoryKey);
+                    setSelectedCategory(option ?? { name: category.name, icon: "" });
+                  }} className="rounded-lg border px-3 py-2" style={{ borderColor: colors.border, minHeight: 48, justifyContent: "center" }}><Text className="text-sm font-semibold" style={{ color: colors.accent }}>Set limit</Text></Pressable>
+                </View>
+              )}
+            </View>
+          );
+        })}
+
+        {categoryBudgets.filter((limit) => !allCategories.some((category) => normalizeCategoryKey(category.name) === limit.categoryKey)).map((limit) => {
+          const spentInINR = categorySpending.get(limit.categoryKey) ?? 0;
+          const progressData = calculateCategoryBudgetProgress(spentInINR, limit.amountInINR);
+          const ratio = progressData.usagePercent! / 100;
+          return (
+            <View key={limit.$id} className="mt-4 rounded-xl border p-3" style={{ borderColor: colors.border }}>
+              <Text numberOfLines={1} className="font-semibold" style={{ color: colors.primary }}>{limit.category}</Text>
+              <Text className="mt-2 text-sm" style={{ color: colors.secondary }}>{formatAmount(spentInINR)} spent · Limit {formatAmount(limit.amountInINR)} · Remaining {formatAmount(Math.max(0, limit.amountInINR - spentInINR))}</Text>
+              <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>{Math.round(ratio * 100)}% used{ratio > 1 ? " · Over limit" : ""}</Text>
+              <View className="mt-2 h-2 overflow-hidden rounded-full" style={{ backgroundColor: colors.progressTrack }}><View style={{ height: 8, width: `${Math.min(ratio * 100, 100)}%`, backgroundColor: ratio > 1 ? colors.warningText : colors.progressFill }} /></View>
+              <TextInput value={categoryLimitInput} onChangeText={setCategoryLimitInput} placeholder={isCurrencyReady ? `New limit (${currency})` : "Loading currency…"} keyboardType="decimal-pad" editable={isCurrencyReady && !categoryBusy} className="mt-3 w-full rounded-lg border px-3 py-3 text-base" style={{ color: colors.primary, borderColor: colors.border, minHeight: 48 }} />
+              <View className="mt-2 flex-row gap-2">
+                <Pressable disabled={!isCurrencyReady || categoryBusy} onPress={() => void saveCategoryLimit(limit)} className="flex-1 items-center justify-center rounded-lg border px-3 py-3" style={{ borderColor: colors.border, minHeight: 48, opacity: !isCurrencyReady || categoryBusy ? 0.5 : 1 }}><Text className="text-sm font-semibold" style={{ color: colors.accent }}>Update</Text></Pressable>
+                <Pressable disabled={categoryBusy} onPress={() => void removeCategoryLimit(limit)} className="flex-1 items-center justify-center rounded-lg border px-3 py-3" style={{ borderColor: colors.border, minHeight: 48, opacity: categoryBusy ? 0.5 : 1 }}><Text className="text-sm font-semibold" style={{ color: colors.warningText }}>Remove</Text></Pressable>
+              </View>
+            </View>
+          );
+        })}
+
+        <Text className="mt-4 text-sm font-semibold" style={{ color: colors.primary }}>Add a category limit</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={selectedCategory ? `Selected category ${selectedCategory.name}. Choose category` : "Choose a category"}
+          onPress={() => setIsCategoryPickerVisible(true)}
+          className="mt-2 w-full flex-row items-center justify-between rounded-lg border px-3 py-3"
+          style={{ borderColor: colors.border, minHeight: 52, backgroundColor: colors.input }}
+        >
+          <Text className="flex-1 text-base" numberOfLines={1} style={{ color: selectedCategory ? colors.primary : colors.placeholder }}>
+            {selectedCategory ? `${selectedCategory.icon}  ${selectedCategory.name}` : "Choose category"}
+          </Text>
+          <Ionicons name="chevron-down" size={20} color={colors.secondary} />
+        </Pressable>
+        <TextInput value={categoryLimitInput} onChangeText={setCategoryLimitInput} placeholder={isCurrencyReady ? `Amount (${currency})` : "Loading currency…"} keyboardType="decimal-pad" editable={isCurrencyReady && !categoryBusy} className="mt-2 w-full rounded-lg border px-3 py-3 text-base" style={{ color: colors.primary, borderColor: colors.border, minHeight: 48 }} />
+        <Pressable disabled={!isCurrencyReady || categoryBusy || !selectedCategory} onPress={() => void saveCategoryLimit()} className="mt-2 w-full items-center justify-center rounded-lg px-4 py-3" style={{ backgroundColor: colors.accent, minHeight: 48, opacity: !isCurrencyReady || categoryBusy || !selectedCategory ? 0.5 : 1 }}><Text className="font-semibold text-white">Add category limit</Text></Pressable>
+        {categoryLimitsExceedOverallBudget(categoryBudgets.map((item) => item.amountInINR), savedBudgetInINR) ? <Text className="mt-3 text-sm" style={{ color: colors.warningText }}>Category limits total more than the monthly budget. These optional limits do not change your overall budget.</Text> : null}
+        {!categoryBudgetsLoading && categoryBudgets.length === 0 ? <Text className="mt-3 text-sm" style={{ color: colors.secondary }}>No category limits configured.</Text> : null}
+      </View>
+
+      <Modal
+        visible={isCategoryPickerVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsCategoryPickerVisible(false)}
+      >
+        <View className="flex-1 justify-end" style={{ backgroundColor: "rgba(0,0,0,0.45)" }}>
+          <View className="max-h-[82%] rounded-t-3xl p-5" style={{ backgroundColor: colors.card }}>
+            <View className="mb-3 flex-row items-center justify-between">
+              <Text className="text-lg font-bold" style={{ color: colors.primary }}>Choose category</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close category selector" onPress={() => setIsCategoryPickerVisible(false)} className="items-center justify-center rounded-lg p-2" style={{ minWidth: 48, minHeight: 48 }}>
+                <Ionicons name="close" size={24} color={colors.secondary} />
+              </Pressable>
+            </View>
+            {customCategoriesLoading ? <Text className="py-4" style={{ color: colors.secondary }}>Loading your categories…</Text> : null}
+            {customCategoriesError ? (
+              <View className="my-2 rounded-xl border p-3" style={{ borderColor: colors.warningText, backgroundColor: colors.warningBg }}>
+                <Text className="text-sm" style={{ color: colors.warningText }}>Custom categories could not be loaded. Built-in categories are still available.</Text>
+                <Pressable accessibilityRole="button" disabled={customCategoriesLoading} onPress={() => void loadCustomCategories()} className="mt-2 items-center justify-center rounded-lg border px-3" style={{ borderColor: colors.warningText, minHeight: 48, opacity: customCategoriesLoading ? 0.5 : 1 }}>
+                  <Text className="font-semibold" style={{ color: colors.warningText }}>Retry custom categories</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {!customCategoriesLoading && availableCategoryOptions.length === 0 ? (
+              <Text className="py-4" style={{ color: colors.secondary }}>All available categories already have an active monthly limit.</Text>
+            ) : null}
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+              {availableCategoryOptions.some((option) => option.source === "built-in") ? (
+                <>
+                  <Text className="mb-1 mt-2 text-xs font-bold uppercase tracking-wide" style={{ color: colors.secondary }}>Built-in categories</Text>
+                  {availableCategoryOptions.filter((option) => option.source === "built-in").map((option) => (
+                    <Pressable key={`builtin-${normalizeCategoryKey(option.name)}`} accessibilityRole="button" onPress={() => { setSelectedCategory({ name: option.name, icon: option.icon }); setIsCategoryPickerVisible(false); }} className="mb-1 w-full flex-row items-center rounded-xl px-3" style={{ minHeight: 52, backgroundColor: normalizeCategoryKey(selectedCategory?.name) === normalizeCategoryKey(option.name) ? colors.chip : "transparent" }}>
+                      <Text className="mr-3 text-xl">{option.icon}</Text>
+                      <Text className="flex-1 text-base" style={{ color: colors.primary }}>{option.name}</Text>
+                    </Pressable>
+                  ))}
+                </>
+              ) : null}
+              {availableCategoryOptions.some((option) => option.source === "custom") ? (
+                <>
+                  <Text className="mb-1 mt-3 text-xs font-bold uppercase tracking-wide" style={{ color: colors.secondary }}>Your categories</Text>
+                  {availableCategoryOptions.filter((option) => option.source === "custom").map((option) => (
+                    <Pressable key={`custom-${normalizeCategoryKey(option.name)}`} accessibilityRole="button" onPress={() => { setSelectedCategory({ name: option.name, icon: option.icon }); setIsCategoryPickerVisible(false); }} className="mb-1 w-full flex-row items-center rounded-xl px-3" style={{ minHeight: 52, backgroundColor: normalizeCategoryKey(selectedCategory?.name) === normalizeCategoryKey(option.name) ? colors.chip : "transparent" }}>
+                      <Text className="mr-3 text-xl">{option.icon}</Text>
+                      <Text className="flex-1 text-base" numberOfLines={1} style={{ color: colors.primary }}>{option.name}</Text>
+                    </Pressable>
+                  ))}
+                </>
+              ) : null}
+            </ScrollView>
+            <Pressable onPress={() => setIsCategoryPickerVisible(false)} className="mt-3 w-full items-center justify-center rounded-xl border px-4" style={{ borderColor: colors.border, minHeight: 48 }}>
+              <Text className="font-semibold" style={{ color: colors.secondary }}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <View className="mt-6 gap-3">
         <Pressable

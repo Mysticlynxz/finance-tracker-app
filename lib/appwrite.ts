@@ -306,14 +306,27 @@ export const createExpense = async (
 export const getExpenses = async (): Promise<ExpenseDocument[]> => {
   try {
     const user = await getCurrentUser();
+    const pageSize = 100;
+    const documents: ExpenseDocument[] = [];
+    let offset = 0;
+    let total = 0;
 
-    const response = await databases.listDocuments<ExpenseDocument>({
-      databaseId: APPWRITE_DATABASE_ID,
-      collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
-      queries: [Query.equal("userId", user.$id)],
-    });
+    do {
+      const response = await databases.listDocuments<ExpenseDocument>({
+        databaseId: APPWRITE_DATABASE_ID,
+        collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
+        queries: [
+          Query.equal("userId", user.$id),
+          Query.limit(pageSize),
+          Query.offset(offset),
+        ],
+      });
+      documents.push(...response.documents);
+      total = response.total;
+      offset += response.documents.length;
+    } while (offset < total && offset > 0);
 
-    return response.documents.map((expense) => ({
+    return documents.map((expense) => ({
       ...expense,
       amount: parseNumericAmount(expense.amount, `expense:${expense.$id}`),
     }));

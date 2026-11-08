@@ -13,6 +13,12 @@ import {
   type ExpenseDocument,
 } from "../../lib/appwrite";
 import { syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
+import {
+  aggregateSpendingForMonth,
+  getCalendarDateKey,
+  getCurrentMonthDateKeys,
+  sumAmountsCompensated,
+} from "../../lib/reportDates";
 
 export default function Home() {
   const { isDarkMode, formatAmount } = useContext(ExpenseContext);
@@ -23,7 +29,9 @@ export default function Home() {
     return Number.isFinite(numericAmount) ? numericAmount : 0;
   };
 
-  const totalSpent = expenses.reduce((sum, expense) => sum + getExpenseAmount(expense), 0);
+  const currentMonthSpending = aggregateSpendingForMonth(expenses, getExpenseAmount, getCurrentMonthDateKeys());
+  const currentMonthExpenses = currentMonthSpending.items;
+  const totalSpent = currentMonthSpending.total;
   const budgetAmount = budget ?? 0;
   const remaining = budgetAmount - totalSpent;
   const percentageUsed = budgetAmount > 0 ? (totalSpent / budgetAmount) * 100 : 0;
@@ -152,20 +160,22 @@ export default function Home() {
       return "Set a monthly budget to track your spending and get helpful insights.";
     }
 
-    if (expenses.length === 0) {
+    if (currentMonthExpenses.length === 0) {
       return "Add transactions to unlock spending insights.";
     }
 
-    const foodSpent = expenses
+    const foodSpent = sumAmountsCompensated(currentMonthExpenses
       .filter((expense) => expense.category.toLowerCase().includes("food"))
-      .reduce((sum, expense) => sum + getExpenseAmount(expense), 0);
+      .map(getExpenseAmount));
 
     if (totalSpent > 0 && foodSpent / totalSpent > 0.5) {
       return "Food spending is your highest expense.";
     }
 
     if (budgetAmount > 0) {
-      const uniqueDays = new Set(expenses.map((expense) => expense.date.slice(0, 10))).size;
+      const uniqueDays = new Set(currentMonthExpenses
+        .map((expense) => getCalendarDateKey(expense.date))
+        .filter((dateKey): dateKey is string => dateKey !== null)).size;
       const dailyAverage = totalSpent / Math.max(uniqueDays, 1);
       const weeklyProjection = dailyAverage * 7;
 
