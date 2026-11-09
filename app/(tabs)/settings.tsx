@@ -1,11 +1,13 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { type Href, router } from "expo-router";
-import { useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
+  Platform,
   ScrollView,
   Switch,
   Text,
@@ -20,6 +22,8 @@ import {
   normalizeCurrencyCode,
 } from "../../constants/currency";
 import { getCurrentUser, getBudget, getExpenses, logoutUser, resetAllData } from "../../lib/appwrite";
+import { budgetNotificationPersistence } from "../../lib/budgetNotificationPersistence";
+import { hasBudgetAlertPermission, requestBudgetAlertPermission } from "../../lib/budgetNotificationPermissions";
 
 const LOGIN_ROUTE = "/login" as Href;
 
@@ -43,24 +47,60 @@ export default function SettingsScreen() {
   const [userEmail, setUserEmail] = useState<string>("");
   const [userLoading, setUserLoading] = useState(true);
   const [userError, setUserError] = useState(false);
+  const [budgetAlertsUserId, setBudgetAlertsUserId] = useState("");
+  const [budgetAlertsEnabled, setBudgetAlertsEnabled] = useState(false);
+  const [budgetAlertsLoading, setBudgetAlertsLoading] = useState(true);
+  const [budgetAlertsBusy, setBudgetAlertsBusy] = useState(false);
+  const profileRequestId = useRef(0);
 
-  const loadUserProfile = async () => {
+  const loadUserProfile = useCallback(async () => {
+    const requestId = ++profileRequestId.current;
+    const isCurrentRequest = () => requestId === profileRequestId.current;
     setUserLoading(true);
     setUserError(false);
+    setBudgetAlertsLoading(true);
+    setBudgetAlertsUserId("");
+    setBudgetAlertsEnabled(false);
     try {
       const user = await getCurrentUser();
+      if (!isCurrentRequest()) return;
       setUserName(user.name && user.name.trim() ? user.name.trim() : "");
       setUserEmail(user.email);
+      setBudgetAlertsUserId(user.$id);
+      try {
+        let enabled = await budgetNotificationPersistence.getEnabled(user.$id);
+        if (enabled && !(await hasBudgetAlertPermission())) {
+          enabled = false;
+          try {
+            await budgetNotificationPersistence.setEnabled(user.$id, false);
+          } catch {
+            // Keep the UI disabled even if preference storage is temporarily unavailable.
+          }
+        }
+        if (isCurrentRequest()) setBudgetAlertsEnabled(enabled);
+      } catch {
+        if (isCurrentRequest()) setBudgetAlertsEnabled(false);
+      }
       setUserLoading(false);
     } catch {
+      if (!isCurrentRequest()) return;
       setUserError(true);
+      setBudgetAlertsUserId("");
+      setBudgetAlertsEnabled(false);
       setUserLoading(false);
+    } finally {
+      if (isCurrentRequest()) setBudgetAlertsLoading(false);
     }
-  };
-
-  useEffect(() => {
-    void loadUserProfile();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadUserProfile();
+      return () => {
+        profileRequestId.current += 1;
+      };
+    }, [loadUserProfile])
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -115,6 +155,56 @@ export default function SettingsScreen() {
   const handleCurrencySelect = (selectedCurrency: string) => {
     setCurrency(selectedCurrency);
     setIsCurrencyMenuOpen(false);
+  };
+
+  const handleBudgetAlertsToggle = async (enabled: boolean) => {
+    if (budgetAlertsBusy || budgetAlertsLoading) return;
+    if (!budgetAlertsUserId) {
+      Alert.alert("Account unavailable", "Sign in again before changing Budget Alerts.");
+      return;
+    }
+
+    setBudgetAlertsBusy(true);
+    try {
+      if (!enabled) {
+        await budgetNotificationPersistence.setEnabled(budgetAlertsUserId, false);
+        setBudgetAlertsEnabled(false);
+        return;
+      }
+
+      const permission = await requestBudgetAlertPermission();
+      if (!permission.granted) {
+        const message = permission.canAskAgain
+          ? "Allow notification permission to receive Budget Alerts. The setting will stay off until permission is granted."
+          : Platform.OS === "android"
+            ? "Notifications are blocked. Open Android Settings, choose SpendWise, then allow Notifications. The setting will stay off until permission is granted."
+            : "Notifications are blocked for SpendWise in system settings. Allow them there, then try again.";
+        Alert.alert(
+          "Notifications not enabled",
+          message,
+          permission.canAskAgain
+            ? [{ text: "OK" }]
+            : [
+                { text: "Cancel", style: "cancel" },
+                { text: "Open Settings", onPress: () => void Linking.openSettings() },
+              ]
+        );
+        setBudgetAlertsEnabled(false);
+        return;
+      }
+
+      await budgetNotificationPersistence.setEnabled(budgetAlertsUserId, true);
+      setBudgetAlertsEnabled(true);
+    } catch {
+      Alert.alert(
+        "Budget Alerts unavailable",
+        enabled
+          ? "Could not enable Budget Alerts. Check notification permission and try again."
+          : "Could not save the Budget Alerts preference. Please try again."
+      );
+    } finally {
+      setBudgetAlertsBusy(false);
+    }
   };
 
   const performResetData = async () => {
@@ -337,6 +427,32 @@ export default function SettingsScreen() {
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.secondary} />
           </Pressable>
+
+          <View
+            className="mb-3 flex-row items-center justify-between rounded-xl px-3 py-3"
+            style={{ backgroundColor: colors.subtle }}
+          >
+            <View className="mr-3 flex-1 flex-row items-center gap-2">
+              <Ionicons name="notifications-outline" size={20} color={colors.primary} />
+              <View className="flex-1">
+                <Text className="font-semibold" style={{ color: colors.primary }}>
+                  Budget Alerts
+                </Text>
+                <Text className="text-xs" style={{ color: colors.secondary }}>
+                  {budgetAlertsLoading
+                    ? "Loading alert preference…"
+                    : "Notify me when spending approaches or passes a budget"}
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={budgetAlertsEnabled}
+              onValueChange={(value) => void handleBudgetAlertsToggle(value)}
+              disabled={budgetAlertsLoading || budgetAlertsBusy || !budgetAlertsUserId}
+              trackColor={{ false: "#64748b", true: "#2563eb" }}
+              thumbColor={budgetAlertsEnabled ? "#e2e8f0" : "#ffffff"}
+            />
+          </View>
 
           <View
             className="flex-row items-center justify-between rounded-xl px-3 py-3"

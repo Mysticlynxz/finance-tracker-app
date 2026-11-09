@@ -7,7 +7,7 @@ Do not commit a populated `.env` file.
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | Yes | Gemini advisor responses and expense extraction. |
-| `GNANI_API_KEY` | Yes for primary transcription | Gnani Prisma API key ID, sent only as `X-API-Key-ID` by the function. |
+| `GNANI_API_KEY` | Yes for primary transcription and FinBot TTS | Gnani API key ID, sent only as `X-API-Key-ID` by the function. |
 | `APPWRITE_DATABASE_ID` | Yes for advisor | Database queried for user expenses and budgets. |
 | `APPWRITE_EXPENSES_COLLECTION_ID` | Optional | Expenses collection; defaults to `expenses`. |
 | `APPWRITE_BUDGETS_COLLECTION_ID` | Optional | Budgets collection; defaults to `budgets`. |
@@ -45,8 +45,17 @@ server-side variable. Retain `GEMINI_API_KEY` for the advisor and expense
 extraction. Never put provider credentials in Expo or an `EXPO_PUBLIC_`
 variable.
 Configure the Function timeout to the Appwrite-supported 30-second maximum;
-voice execution is synchronous and internally targets completion within 22
+transcription execution is synchronous and internally targets completion within 22
 seconds, leaving time for cleanup and response delivery.
+
+FinBot speech uses the same server-side `GNANI_API_KEY` with Timbre v3.0 via
+`POST https://api.vachana.ai/api/v1/tts/inference`. The existing key must also
+have Gnani TTS service permission; matching the Prisma header does not prove
+TTS entitlement. The function fixes the voice to Shivani, language to `auto`,
+and MP3 output, and accepts at most 500 characters. It rejects generated audio
+larger than 512 KiB before returning Base64 through synchronous Appwrite
+execution. Do not retry scope-denial responses automatically; enable TTS
+permission for the existing key in Gnani when access is denied.
 
 The local Appwrite CLI manifest targets the Appwrite `node-22` runtime.
 Voice transcription uses Node 22's built-in `fetch`, `FormData`, `Blob`, and

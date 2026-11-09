@@ -21,6 +21,8 @@ import { extractExpenseFromUserText } from "../lib/expenseExtraction";
 import { isValidCurrencyAmount } from "../lib/amountValidation";
 import { useAudioRecorder } from "../lib/useAudioRecorder";
 import { transcribeAudioUri } from "../lib/voiceTranscription";
+import { captureBudgetAlertSnapshot, evaluateBudgetAlertsAfterSave } from "../lib/budgetNotificationService";
+import { saveVoiceExpenseBatchWithBudgetAlerts } from "../lib/voiceExpenseBatchSave";
 
 const MAX_RECORDING_DURATION_MS = 30_000;
 
@@ -76,7 +78,7 @@ const formatDuration = (seconds: number) =>
 const generateExpenseId = (): string => `voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export default function VoiceInputScreen() {
-  const { isDarkMode, currency, convertToINR, isCurrencyReady } = useContext(ExpenseContext);
+  const { isDarkMode, currency, convertToINR, formatAmount, isCurrencyReady } = useContext(ExpenseContext);
   const { recording, startRecording, stopRecording } = useAudioRecorder();
   const [detectedExpenses, setDetectedExpenses] = useState<DetectedExpense[]>([]);
   const [isSavingExpense, setIsSavingExpense] = useState(false);
@@ -171,37 +173,19 @@ export default function VoiceInputScreen() {
 
     try {
       const total = detectedExpenses.length;
-      let savedCount = 0;
-      const failedIds = new Set<string>();
-
-      for (const expense of detectedExpenses) {
-        const { id, amount, category, date } = expense;
-        const parsedAmount = Number(amount.trim());
-        if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-          failedIds.add(id);
-          continue;
-        }
-
-        const amountInINR = convertToINR(parsedAmount);
-        if (!Number.isFinite(amountInINR) || amountInINR <= 0) {
-          failedIds.add(id);
-          continue;
-        }
-
-        try {
-          await createExpense({
-            documentId: id,
-            amount: amountInINR,
-            category: category.trim(),
-            date: toExpenseTimestamp(date),
-          });
-          savedCount++;
-          console.log("Saved voice expense:", { id, category: category.trim() });
-        } catch (error) {
-          console.error("[Voice Input] Save failed for item:", error);
-          failedIds.add(id);
-        }
-      }
+      const { result: batchResult, notificationTask } = await saveVoiceExpenseBatchWithBudgetAlerts({
+        expenses: detectedExpenses,
+        createExpense,
+        convertToINR,
+        toExpenseTimestamp,
+        captureBefore: captureBudgetAlertSnapshot,
+        evaluateAfter: (snapshot) => evaluateBudgetAlertsAfterSave(snapshot, formatAmount),
+        onExpenseSaved: ({ id, category }) => console.log("Saved voice expense:", { id, category: category.trim() }),
+        onExpenseSaveError: (error) => console.error("[Voice Input] Save failed for item:", error),
+        onNotificationError: () => console.warn("[BudgetAlerts] Processing failed; voice saves continue."),
+      });
+      void notificationTask;
+      const { savedCount, failedIds } = batchResult;
 
       if (savedCount === total) {
         // All saved successfully.

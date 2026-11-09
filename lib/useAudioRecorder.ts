@@ -2,7 +2,7 @@ import { Audio } from "expo-av";
 import { Platform } from "react-native";
 import { useEffect, useRef, useState } from "react";
 
-export function useAudioRecorder() {
+export function useAudioRecorder(onUnmountRecording?: (audioUri: string | null) => void) {
   const MIN_RECORDING_MS = 600;
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [audioUri, setAudioUri] = useState<string | null>(null);
@@ -10,6 +10,8 @@ export function useAudioRecorder() {
   const startPromiseRef = useRef<Promise<void> | null>(null);
   const isStoppingRef = useRef(false);
   const recordingStartedAtRef = useRef<number | null>(null);
+  const onUnmountRecordingRef = useRef(onUnmountRecording);
+  onUnmountRecordingRef.current = onUnmountRecording;
 
   useEffect(() => {
     recordingRef.current = recording;
@@ -19,8 +21,21 @@ export function useAudioRecorder() {
     return () => {
       const activeRecording = recordingRef.current;
 
-      if (activeRecording) {
-        void activeRecording.stopAndUnloadAsync().catch(() => undefined);
+      if (activeRecording && !isStoppingRef.current) {
+        isStoppingRef.current = true;
+        const audioUri = activeRecording.getURI();
+        void activeRecording
+          .stopAndUnloadAsync()
+          .catch(() => undefined)
+          .finally(() => {
+            isStoppingRef.current = false;
+            if (!audioUri) return;
+            try {
+              onUnmountRecordingRef.current?.(audioUri);
+            } catch (error) {
+              console.warn("[Voice Recorder] Unable to remove the unmounted recording.", error);
+            }
+          });
       }
 
       if (Platform.OS !== "web") {

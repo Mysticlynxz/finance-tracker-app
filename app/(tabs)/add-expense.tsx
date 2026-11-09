@@ -17,6 +17,8 @@ import { DEFAULT_CATEGORIES, type CategoryOption } from "../../constants/categor
 import { parseCurrencyAmount } from "../../lib/amountValidation";
 import { createCategory, getCategories } from "../../lib/categoryService";
 import { createExpense } from "../../lib/appwrite";
+import { captureBudgetAlertSnapshot, evaluateBudgetAlertsAfterSave } from "../../lib/budgetNotificationService";
+import { saveManualExpenseWithBudgetAlerts } from "../../lib/manualExpenseSave";
 
 const mapCategoryDocument = (category: { name: string; icon: string }): CategoryOption => ({
   name: category.name,
@@ -24,7 +26,7 @@ const mapCategoryDocument = (category: { name: string; icon: string }): Category
 });
 
 export default function AddExpense() {
-  const { isDarkMode, currency, addExpense, convertToINR, isCurrencyReady } = useContext(ExpenseContext);
+  const { isDarkMode, currency, addExpense, convertToINR, formatAmount, isCurrencyReady } = useContext(ExpenseContext);
   const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<CategoryOption | null>(null);
   const [amount, setAmount] = useState("");
@@ -135,13 +137,20 @@ export default function AddExpense() {
         throw new Error("Expense amount could not be converted to INR.");
       }
 
-      await createExpense({
-        amount: Number(amountInINR),
-        category: selectedCategory.name,
-        date,
+      const { result: createdExpense, notificationTask } = await saveManualExpenseWithBudgetAlerts({
+        captureBefore: captureBudgetAlertSnapshot,
+        createExpense,
+        input: {
+          amount: Number(amountInINR),
+          category: selectedCategory.name,
+          date,
+        },
+        evaluateAfter: (snapshot) => evaluateBudgetAlertsAfterSave(snapshot, formatAmount),
+        onNotificationError: () => console.warn("[BudgetAlerts] Processing failed; expense save continues."),
       });
+      void notificationTask;
 
-      addExpense(amountInINR, selectedCategory.name);
+      addExpense(createdExpense.amount, selectedCategory.name);
       closeExpenseModal();
       router.replace("/home");
     } catch (error) {

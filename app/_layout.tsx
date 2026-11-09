@@ -1,10 +1,20 @@
 import "react-native-url-polyfill/auto";
 import "./global.css";
+import * as Notifications from "expo-notifications";
 import { type Href, Redirect, Stack, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, LogBox, Text, View } from "react-native";
 import { ExpenseProvider } from "../Context/ExpenseContext";
 import { getCurrentUser } from "../lib/appwrite";
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
 
 LogBox.ignoreLogs([
   "SafeAreaView has been deprecated and will be removed in a future release. Please use 'react-native-safe-area-context' instead.",

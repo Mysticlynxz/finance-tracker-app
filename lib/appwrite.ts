@@ -13,6 +13,7 @@ import {
   Storage,
 } from "appwrite";
 import { normalizeCurrencyCode } from "../constants/currency";
+import { createAuthSessionGuard, type AuthSessionIdentity } from "./authSessionGuard";
 
 export const APPWRITE_ENDPOINT =
   process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT?.trim() || "https://fra.cloud.appwrite.io/v1";
@@ -46,6 +47,23 @@ export const account = new Account(client);
 export const databases = new Databases(client);
 export const functions = new Functions(client);
 export const storage = new Storage(client);
+
+const authSessionGuard = createAuthSessionGuard(async () => {
+  const [user, session] = await Promise.all([
+    account.get(),
+    account.getSession({ sessionId: "current" }),
+  ]);
+  return { userId: user.$id, sessionId: session.$id };
+});
+
+export const beginAuthSessionTransition = () => authSessionGuard.beginTransition();
+export const finishAuthSessionTransition = (transitionId: number) =>
+  authSessionGuard.finishTransition(transitionId);
+export const captureAuthSessionIdentity = () => authSessionGuard.capture();
+export const isAuthSessionIdentityCurrent = (identity: AuthSessionIdentity) =>
+  authSessionGuard.isCurrent(identity);
+export const isAuthSessionGenerationCurrent = (identity: AuthSessionIdentity) =>
+  authSessionGuard.isGenerationCurrent(identity);
 
 export const getErrorMessage = (error: unknown) => {
   if (error instanceof AppwriteException || error instanceof Error) {
@@ -134,21 +152,44 @@ const buildUserDocumentPermissions = (userId: string) => [
   Permission.delete(Role.user(userId)),
 ];
 
-const deleteUserDocuments = async (collectionId: string): Promise<number> => {
-  const user = await getCurrentUser();
+export interface AuthSessionBoundaryChecks {
+  isCurrent?: () => Promise<boolean>;
+  isGenerationCurrent?: () => boolean;
+}
+
+const assertSessionBoundary = async (checks?: AuthSessionBoundaryChecks) => {
+  if (checks?.isGenerationCurrent && !checks.isGenerationCurrent()) {
+    throw new Error("Authentication session changed during notification evaluation.");
+  }
+  if (checks?.isCurrent && !(await checks.isCurrent())) {
+    throw new Error("Authentication session changed during notification evaluation.");
+  }
+  if (checks?.isGenerationCurrent && !checks.isGenerationCurrent()) {
+    throw new Error("Authentication session changed during notification evaluation.");
+  }
+};
+
+const deleteUserDocumentsForUser = async (
+  collectionId: string,
+  userId: string,
+  checks?: AuthSessionBoundaryChecks
+): Promise<number> => {
   let deletedCount = 0;
 
   while (true) {
+    await assertSessionBoundary(checks);
     const response = await databases.listDocuments({
       databaseId: APPWRITE_DATABASE_ID,
       collectionId,
-      queries: [Query.equal("userId", user.$id), Query.limit(RESET_BATCH_SIZE)],
+      queries: [Query.equal("userId", userId), Query.limit(RESET_BATCH_SIZE)],
     });
+    await assertSessionBoundary(checks);
 
     if (response.documents.length === 0) {
       break;
     }
 
+    await assertSessionBoundary(checks);
     await Promise.all(
       response.documents.map((document) =>
         databases.deleteDocument({
@@ -158,11 +199,17 @@ const deleteUserDocuments = async (collectionId: string): Promise<number> => {
         })
       )
     );
+    await assertSessionBoundary(checks);
 
     deletedCount += response.documents.length;
   }
 
   return deletedCount;
+};
+
+const deleteUserDocuments = async (collectionId: string): Promise<number> => {
+  const user = await getCurrentUser();
+  return deleteUserDocumentsForUser(collectionId, user.$id);
 };
 
 export const registerUser = async ({
@@ -188,6 +235,7 @@ export const loginUser = async ({
   email,
   password,
 }: LoginUserInput): Promise<Models.Session> => {
+  const transitionId = beginAuthSessionTransition();
   try {
     return await account.createEmailPasswordSession({
       email,
@@ -197,6 +245,8 @@ export const loginUser = async ({
     const message = getErrorMessage(error);
     console.error("[Appwrite] loginUser failed:", message);
     throw new Error(message);
+  } finally {
+    finishAuthSessionTransition(transitionId);
   }
 };
 
@@ -210,6 +260,7 @@ export const getCurrentUser = async (): Promise<Models.User<Models.Preferences>>
 };
 
 export const logoutUser = async (): Promise<void> => {
+  const transitionId = beginAuthSessionTransition();
   try {
     await account.deleteSession({
       sessionId: "current",
@@ -218,6 +269,8 @@ export const logoutUser = async (): Promise<void> => {
     const message = getErrorMessage(error);
     console.error("[Appwrite] logoutUser failed:", message);
     throw new Error(message);
+  } finally {
+    finishAuthSessionTransition(transitionId);
   }
 };
 
@@ -303,24 +356,28 @@ export const createExpense = async (
   }
 };
 
-export const getExpenses = async (): Promise<ExpenseDocument[]> => {
+const listExpensesForUser = async (
+  userId: string,
+  checks?: AuthSessionBoundaryChecks
+): Promise<ExpenseDocument[]> => {
   try {
-    const user = await getCurrentUser();
     const pageSize = 100;
     const documents: ExpenseDocument[] = [];
     let offset = 0;
     let total = 0;
 
     do {
+      await assertSessionBoundary(checks);
       const response = await databases.listDocuments<ExpenseDocument>({
         databaseId: APPWRITE_DATABASE_ID,
         collectionId: APPWRITE_EXPENSES_COLLECTION_ID,
         queries: [
-          Query.equal("userId", user.$id),
+          Query.equal("userId", userId),
           Query.limit(pageSize),
           Query.offset(offset),
         ],
       });
+      await assertSessionBoundary(checks);
       documents.push(...response.documents);
       total = response.total;
       offset += response.documents.length;
@@ -334,6 +391,24 @@ export const getExpenses = async (): Promise<ExpenseDocument[]> => {
     console.error("getExpenses failed", error);
     throw error;
   }
+};
+
+export const getExpensesForUser = async (
+  userId: string,
+  checks?: AuthSessionBoundaryChecks
+): Promise<ExpenseDocument[]> => {
+  await assertSessionBoundary(checks);
+  const user = await getCurrentUser();
+  if (user.$id !== userId) {
+    throw new Error("Authenticated user changed before expenses were loaded.");
+  }
+  await assertSessionBoundary(checks);
+  return listExpensesForUser(userId, checks);
+};
+
+export const getExpenses = async (): Promise<ExpenseDocument[]> => {
+  const user = await getCurrentUser();
+  return listExpensesForUser(user.$id);
 };
 
 export const clearExpenses = async (): Promise<number> => {
@@ -395,15 +470,24 @@ export const setBudget = async (
   }
 };
 
-export const getBudgetRecord = async (): Promise<UserBudgetRecord | null> => {
+export const getBudgetRecordForUser = async (
+  userId: string,
+  checks?: AuthSessionBoundaryChecks
+): Promise<UserBudgetRecord | null> => {
   try {
+    await assertSessionBoundary(checks);
     const user = await getCurrentUser();
+    if (user.$id !== userId) {
+      throw new Error("Authenticated user changed before the budget was loaded.");
+    }
+    await assertSessionBoundary(checks);
 
     const budgets = await databases.listDocuments<BudgetDocument>({
       databaseId: APPWRITE_DATABASE_ID,
       collectionId: APPWRITE_BUDGETS_COLLECTION_ID,
-      queries: [Query.equal("userId", user.$id)],
+      queries: [Query.equal("userId", userId)],
     });
+    await assertSessionBoundary(checks);
 
     const budget = budgets.documents[0];
 
@@ -411,13 +495,13 @@ export const getBudgetRecord = async (): Promise<UserBudgetRecord | null> => {
       return null;
     }
 
-    if (budget.userId !== user.$id) {
-      throw new Error("Budget record owner does not match the authenticated user.");
+    if (budget.userId !== userId) {
+      throw new Error("Budget record owner does not match the requested user.");
     }
 
     return {
       amount: parseNumericAmount(budget.amount, `budget:${budget.$id}`),
-      userId: user.$id,
+      userId,
       documentId: budget.$id,
       createdAt: budget.$createdAt,
     };
@@ -426,6 +510,11 @@ export const getBudgetRecord = async (): Promise<UserBudgetRecord | null> => {
     console.error("[Appwrite] getBudget failed:", message);
     throw new Error(message);
   }
+};
+
+export const getBudgetRecord = async (): Promise<UserBudgetRecord | null> => {
+  const user = await getCurrentUser();
+  return getBudgetRecordForUser(user.$id);
 };
 
 export const getBudget = async (): Promise<number | null> => {
@@ -439,6 +528,25 @@ export const clearBudget = async (): Promise<number> => {
   } catch (error) {
     const message = getErrorMessage(error);
     console.error("[Appwrite] clearBudget failed:", message);
+    throw new Error(message);
+  }
+};
+
+export const clearBudgetForUser = async (
+  userId: string,
+  checks?: AuthSessionBoundaryChecks
+): Promise<number> => {
+  try {
+    await assertSessionBoundary(checks);
+    const user = await getCurrentUser();
+    if (user.$id !== userId) {
+      throw new Error("Authenticated user changed before the budget was reset.");
+    }
+    await assertSessionBoundary(checks);
+    return await deleteUserDocumentsForUser(APPWRITE_BUDGETS_COLLECTION_ID, userId, checks);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    console.error("[Appwrite] clearBudgetForUser failed:", message);
     throw new Error(message);
   }
 };
@@ -465,11 +573,26 @@ const executeAiFunction = async (payload: Record<string, unknown>) => {
     },
   });
 
+  if (execution.status !== "completed") {
+    throw new Error("AI function execution did not complete.");
+  }
+  if (
+    typeof execution.responseStatusCode === "number" &&
+    (execution.responseStatusCode < 200 || execution.responseStatusCode >= 300)
+  ) {
+    throw new Error("AI function returned an unsuccessful response.");
+  }
   if (!execution.responseBody) {
     throw new Error("Empty AI function response.");
   }
 
-  const parsedResponse = JSON.parse(execution.responseBody) as { reply?: unknown };
+  const parsedResponse = JSON.parse(execution.responseBody) as {
+    reply?: unknown;
+    unavailable?: unknown;
+  };
+  if (parsedResponse.unavailable === true) {
+    throw new Error("AI advisor is unavailable.");
+  }
   const reply =
     typeof parsedResponse.reply === "string" ? parsedResponse.reply.trim() : "";
 
@@ -480,25 +603,244 @@ const executeAiFunction = async (payload: Record<string, unknown>) => {
   return reply;
 };
 
-export const askFinancialAdvisor = async (message: string, currency?: string): Promise<string> => {
+export interface AdvisorConversationMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export class AdvisorSessionChangedError extends Error {
+  constructor() {
+    super("Your session changed while FinBot was replying.");
+    this.name = "AdvisorSessionChangedError";
+  }
+}
+
+export const MAX_ADVISOR_SPEECH_AUDIO_BYTES = 512 * 1024;
+const MAX_ADVISOR_SPEECH_TEXT_LENGTH = 500;
+const MAX_ADVISOR_SPEECH_BASE64_LENGTH =
+  Math.ceil(MAX_ADVISOR_SPEECH_AUDIO_BYTES / 3) * 4;
+
+export interface AdvisorSpeechAudio {
+  audioBase64: string;
+  mimeType: "audio/mpeg";
+  byteLength: number;
+}
+
+const getBase64ByteLength = (value: string) => {
+  if (
+    !value ||
+    value.length > MAX_ADVISOR_SPEECH_BASE64_LENGTH ||
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  ) {
+    return null;
+  }
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const byteLength = (value.length / 4) * 3 - padding;
+  return byteLength > 0 && byteLength <= MAX_ADVISOR_SPEECH_AUDIO_BYTES
+    ? byteLength
+    : null;
+};
+
+export type AdvisorResponseResult =
+  | { ok: true; reply: string }
+  | { ok: false; reply: string };
+
+const ADVISOR_HISTORY_LIMIT = 6;
+const ADVISOR_MESSAGE_MAX_LENGTH = 2000;
+
+export const sanitizeAdvisorConversationHistory = (
+  history: unknown,
+  currentMessage = ""
+): AdvisorConversationMessage[] => {
+  if (!Array.isArray(history)) return [];
+
+  const sanitized = history.flatMap((entry): AdvisorConversationMessage[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+
+    const candidate = entry as Record<string, unknown>;
+    if (
+      (candidate.role !== "user" && candidate.role !== "assistant") ||
+      typeof candidate.text !== "string"
+    ) return [];
+
+    const text = candidate.text.trim();
+    return text ? [{ role: candidate.role, text }] : [];
+  });
+
+  const last = sanitized[sanitized.length - 1];
+  if (last?.role === "user" && last.text === currentMessage.trim()) {
+    sanitized.pop();
+  }
+
+  return sanitized
+    .slice(-ADVISOR_HISTORY_LIMIT)
+    .map(({ role, text }) => ({ role, text: text.slice(0, ADVISOR_MESSAGE_MAX_LENGTH) }));
+};
+
+export const getAdvisorHistoryForSession = (
+  history: AdvisorConversationMessage[],
+  previousSession: AuthSessionIdentity | null,
+  nextSession: AuthSessionIdentity | null
+) => previousSession && nextSession && sameAdvisorSession(previousSession, nextSession)
+  ? history
+  : [];
+
+export const updateAdvisorConversationHistory = (
+  history: AdvisorConversationMessage[],
+  question: string,
+  result: AdvisorResponseResult
+) => result.ok
+  ? sanitizeAdvisorConversationHistory([
+      ...history,
+      { role: "user", text: question },
+      { role: "assistant", text: result.reply },
+    ])
+  : history;
+
+const sameAdvisorSession = (left: AuthSessionIdentity, right: AuthSessionIdentity) =>
+  left.userId === right.userId &&
+  left.sessionId === right.sessionId &&
+  left.generation === right.generation;
+
+export const requestAdvisorSpeech = async (
+  text: string,
+  expectedSession?: AuthSessionIdentity
+): Promise<AdvisorSpeechAudio> => {
+  const assistantText = text.trim();
+  if (!assistantText || assistantText.length > MAX_ADVISOR_SPEECH_TEXT_LENGTH) {
+    throw new Error("This response cannot be spoken.");
+  }
+
+  const sessionIdentity = await captureAuthSessionIdentity();
+  if (
+    !sessionIdentity ||
+    (expectedSession && !sameAdvisorSession(sessionIdentity, expectedSession)) ||
+    !(await isAuthSessionIdentityCurrent(sessionIdentity))
+  ) {
+    throw new AdvisorSessionChangedError();
+  }
+
+  const execution = await functions.createExecution({
+    functionId: APPWRITE_AI_ADVISOR_FUNCTION_ID,
+    body: JSON.stringify({ mode: "text-to-speech", text: assistantText }),
+    async: false,
+    method: ExecutionMethod.POST,
+    headers: { "Content-Type": "application/json" },
+  });
+  if (execution.status !== "completed") {
+    throw new Error("FinBot voice did not complete. Please try again.");
+  }
+  if (
+    typeof execution.responseStatusCode !== "number" ||
+    execution.responseStatusCode < 200 ||
+    execution.responseStatusCode >= 300
+  ) {
+    let message = "FinBot voice is temporarily unavailable. Please try again.";
+    try {
+      if ((execution.responseBody || "").length > 2048) {
+        throw new Error("Function error response is too large.");
+      }
+      const errorResponse = JSON.parse(execution.responseBody || "") as { error?: unknown };
+      if (typeof errorResponse.error === "string" && errorResponse.error.trim()) {
+        message = errorResponse.error.trim();
+      }
+    } catch {
+      // Keep the generic message for non-JSON Function errors.
+    }
+    throw new Error(message);
+  }
+
+  if ((execution.responseBody || "").length > MAX_ADVISOR_SPEECH_BASE64_LENGTH + 512) {
+    throw new Error("FinBot returned audio that is too large.");
+  }
+  let response: Record<string, unknown>;
+  try {
+    response = JSON.parse(execution.responseBody || "") as Record<string, unknown>;
+  } catch {
+    throw new Error("FinBot returned an invalid audio response.");
+  }
+  if (response.mimeType !== "audio/mpeg" || typeof response.audioBase64 !== "string") {
+    throw new Error("FinBot returned an unsupported audio response.");
+  }
+
+  const byteLength = getBase64ByteLength(response.audioBase64);
+  if (
+    byteLength === null ||
+    !Number.isSafeInteger(response.byteLength) ||
+    response.byteLength !== byteLength
+  ) {
+    throw new Error("FinBot returned an invalid audio response.");
+  }
+  if (
+    !(await isAuthSessionIdentityCurrent(sessionIdentity)) ||
+    (expectedSession && !sameAdvisorSession(sessionIdentity, expectedSession))
+  ) {
+    throw new AdvisorSessionChangedError();
+  }
+
+  return {
+    audioBase64: response.audioBase64,
+    mimeType: "audio/mpeg",
+    byteLength,
+  };
+};
+
+export const askFinancialAdvisorWithStatus = async (
+  message: string,
+  currency?: string,
+  history: AdvisorConversationMessage[] = [],
+  expectedSession?: AuthSessionIdentity
+): Promise<AdvisorResponseResult> => {
   const trimmedMessage = message.trim();
 
   if (!trimmedMessage) {
-    return AI_ADVISOR_UNAVAILABLE_MESSAGE;
+    return { ok: false, reply: AI_ADVISOR_UNAVAILABLE_MESSAGE };
   }
 
   try {
-    return await executeAiFunction({
+    const sessionIdentity = await captureAuthSessionIdentity();
+    if (
+      !sessionIdentity ||
+      (expectedSession && !sameAdvisorSession(sessionIdentity, expectedSession)) ||
+      !(await isAuthSessionIdentityCurrent(sessionIdentity))
+    ) {
+      throw new AdvisorSessionChangedError();
+    }
+    const reply = await executeAiFunction({
       mode: "advisor",
       message: trimmedMessage,
       currency: normalizeCurrencyCode(currency),
+      history: sanitizeAdvisorConversationHistory(history, trimmedMessage),
     });
+    if (
+      (expectedSession && !sameAdvisorSession(sessionIdentity, expectedSession)) ||
+      !(await isAuthSessionIdentityCurrent(sessionIdentity))
+    ) {
+      throw new AdvisorSessionChangedError();
+    }
+    return { ok: true, reply };
   } catch (error) {
+    if (error instanceof AdvisorSessionChangedError) throw error;
     const message = getErrorMessage(error);
     console.error("[Appwrite] askFinancialAdvisor failed:", message);
-    return AI_ADVISOR_UNAVAILABLE_MESSAGE;
+    return { ok: false, reply: AI_ADVISOR_UNAVAILABLE_MESSAGE };
   }
 };
+
+export const askFinancialAdvisor = async (
+  message: string,
+  currency?: string,
+  history: AdvisorConversationMessage[] = [],
+  expectedSession?: AuthSessionIdentity
+): Promise<string> => (await askFinancialAdvisorWithStatus(
+  message,
+  currency,
+  history,
+  expectedSession
+)).reply;
 
 export const requestExpenseExtractionReply = async ({
   message,
