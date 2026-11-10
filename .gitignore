@@ -3,6 +3,11 @@
 # dependencies
 node_modules/
 
+# local agent workspaces
+.agents/
+agent-jobs/
+agent-skills/
+
 # Expo
 .expo/
 dist/
