@@ -13,6 +13,7 @@ import {
   type ExpenseDocument,
 } from "../../lib/appwrite";
 import { syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
+import { formatRecentTransactionTime } from "../../lib/recentTransactionTime";
 import {
   aggregateSpendingForMonth,
   getCalendarDateKey,
@@ -84,19 +85,6 @@ export default function Home() {
     return new Intl.DateTimeFormat(undefined, {
       month: "short",
       day: "numeric",
-    }).format(date);
-  };
-
-  const formatTimeLabel = (dateValue: string) => {
-    const date = new Date(dateValue);
-
-    if (Number.isNaN(date.getTime())) {
-      return "";
-    }
-
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
     }).format(date);
   };
 
@@ -573,28 +561,33 @@ export default function Home() {
                 {label}
               </Text>
 
-              {group.map((expense) => (
-                <View
-                  key={expense.$id}
-                  className="mb-2 flex-row items-center justify-between rounded-xl px-3 py-3"
-                  style={{ backgroundColor: colors.subtle }}
-                >
-                  <View className="flex-1 flex-row items-center pr-3">
-                    <MaterialCommunityIcons name={getCategoryIcon(expense.category)} size={20} color="#3b82f6" />
-                    <View className="ml-3 flex-1">
-                      <Text className="font-semibold" numberOfLines={1} ellipsizeMode="tail" style={{ color: colors.primary }}>
-                        {expense.category}
-                      </Text>
-                    <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>
-                      {formatTimeLabel(expense.date)}
-                    </Text>
+              {group.map((expense) => {
+                const timeLabel = formatRecentTransactionTime(expense.$createdAt);
+                return (
+                  <View
+                    key={expense.$id}
+                    className="mb-2 flex-row items-center justify-between rounded-xl px-3 py-3"
+                    style={{ backgroundColor: colors.subtle }}
+                  >
+                    <View className="flex-1 flex-row items-center pr-3">
+                      <MaterialCommunityIcons name={getCategoryIcon(expense.category)} size={20} color="#3b82f6" />
+                      <View className="ml-3 flex-1">
+                        <Text className="font-semibold" numberOfLines={1} ellipsizeMode="tail" style={{ color: colors.primary }}>
+                          {expense.category}
+                        </Text>
+                        {timeLabel ? (
+                          <Text className="mt-1 text-xs" style={{ color: colors.secondary }}>
+                            {timeLabel}
+                          </Text>
+                        ) : null}
+                      </View>
                     </View>
+                    <Text className="shrink font-semibold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: colors.primary }}>
+                      {formatAmount(getExpenseAmount(expense))}
+                    </Text>
                   </View>
-                  <Text className="shrink font-semibold" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: colors.primary }}>
-                    {formatAmount(getExpenseAmount(expense))}
-                  </Text>
-                </View>
-              ))}
+                );
+              })}
             </View>
           ))
         )}
@@ -616,4 +609,3 @@ export default function Home() {
     </SafeAreaView>
   );
 }
-
