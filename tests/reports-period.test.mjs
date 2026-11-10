@@ -1,6 +1,11 @@
 ﻿import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  allocateCurrencyDisplayAmounts,
+  CURRENCY_CONFIG,
+  formatCurrencyAmount,
+} from "../constants/currency.ts";
+import {
   aggregateCategorySpending,
   aggregateDailyAmounts,
   aggregateSpendingForMonth,
@@ -122,6 +127,23 @@ test("category aggregation retains raw sub-cent INR totals and percentages", () 
     { name: "Food", amount: 0.005, percentage: 50 },
     { name: "Travel", amount: 0.005, percentage: 50 },
   ]);
+});
+
+test("JPY report category rows reconcile to the raw monthly total without altering the breakdown", () => {
+  const expenses = [
+    { category: "Food", amount: 0.22 },
+    { category: "Transport", amount: 0.22 },
+    { category: "Shopping", amount: 0.22 },
+  ];
+  const total = sumAmountsCompensated(expenses.map(({ amount }) => amount));
+  const categories = aggregateCategorySpending(expenses, ({ amount }) => amount);
+  const original = structuredClone(categories);
+  const rows = allocateCurrencyDisplayAmounts(total, categories.map(({ amount }) => amount), "JPY");
+  assert.deepEqual(categories, original);
+  assert.deepEqual(categories.map(({ name }) => name), ["Food", "Transport", "Shopping"]);
+  assert.deepEqual(rows.map((amount) => formatCurrencyAmount(amount, "JPY")), ["¥1", "¥0", "¥0"]);
+  assert.equal(formatCurrencyAmount(rows.reduce((sum, amount) => sum + amount, 0), "JPY"),
+    formatCurrencyAmount(total / CURRENCY_CONFIG.JPY.rate, "JPY"));
 });
 
 test("compensated report sums retain small values beside large amounts", () => {

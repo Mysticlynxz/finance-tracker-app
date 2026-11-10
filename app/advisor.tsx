@@ -27,6 +27,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpenseContext } from "../Context/ExpenseContext";
 import { useAudioRecorder } from "../lib/useAudioRecorder";
 import { createAdvisorVoiceConfirmation } from "../lib/advisorVoiceConfirmation";
+import { canPlayAdvisorSpeech, formatAdvisorDisplayText } from "../lib/advisorPresentation";
 import {
   advisorVoiceReducer,
   deleteAdvisorVoiceRecording,
@@ -42,6 +43,7 @@ import {
   askFinancialAdvisorWithStatus,
   getAdvisorHistoryForSession,
   requestAdvisorSpeech,
+  splitAdvisorSpeechText,
   sanitizeAdvisorConversationHistory,
   type AdvisorConversationMessage,
   updateAdvisorConversationHistory,
@@ -112,6 +114,7 @@ export default function AdvisorScreen() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSessionVerified, setIsSessionVerified] = useState(false);
   const [isVoiceActionPending, setIsVoiceActionPending] = useState(false);
   const [voiceState, dispatchVoice] = useReducer(
@@ -467,7 +470,7 @@ export default function AdvisorScreen() {
     });
 
   const streamText = async (fullText: string, session: AuthSessionIdentity) => {
-    const words = fullText.trim().split(/\s+/).filter(Boolean);
+    const words = fullText.trim().match(/\S+\s*/g) ?? [];
 
     if (words.length === 0) {
       setMessages((current) => {
@@ -500,7 +503,7 @@ export default function AdvisorScreen() {
         return false;
       }
 
-      currentText += `${words[index]} `;
+      currentText += words[index];
 
       setMessages((current) => {
         if (current.length === 0) {
@@ -516,7 +519,7 @@ export default function AdvisorScreen() {
 
         updated[lastIndex] = {
           ...updated[lastIndex],
-          text: currentText.trim(),
+          text: currentText.trimEnd(),
         };
 
         return updated;
@@ -571,6 +574,7 @@ export default function AdvisorScreen() {
     }
 
     isSubmittingRef.current = true;
+    setIsSubmitting(true);
     setInput("");
     Keyboard.dismiss();
     setIsLoading(true);
@@ -659,6 +663,7 @@ export default function AdvisorScreen() {
     } finally {
       isSubmittingRef.current = false;
       if (isMountedRef.current) {
+        setIsSubmitting(false);
         setIsLoading(false);
       }
     }
@@ -709,14 +714,14 @@ export default function AdvisorScreen() {
       }
 
       const sessionKey = `${session.userId}:${session.sessionId}:${session.generation}`;
-      const listener = (state: AdvisorSpeechPlaybackState) => {
+      const listener = (state: AdvisorSpeechPlaybackState, error?: string) => {
         if (
           requestId === speechRequestIdRef.current &&
           isMountedRef.current &&
           isAdvisorFocusedRef.current &&
           isAuthSessionGenerationCurrent(session)
         ) {
-          setSpeechUiState({ key: messageKey, state });
+          setSpeechUiState({ key: messageKey, state, ...(error ? { error } : {}) });
         }
       };
 
@@ -737,7 +742,12 @@ export default function AdvisorScreen() {
 
       speechSessionRef.current = session;
       setSpeechUiState({ key: messageKey, state: "loading" });
-      const audio = await requestAdvisorSpeech(text, session);
+      const segments = splitAdvisorSpeechText(text);
+      const audio = [];
+      for (const segment of segments) {
+        audio.push(await requestAdvisorSpeech(segment, session));
+        if (requestId !== speechRequestIdRef.current || !isAdvisorFocusedRef.current) return;
+      }
       if (requestId !== speechRequestIdRef.current) return;
       if (
         !isAdvisorFocusedRef.current ||
@@ -1067,7 +1077,7 @@ export default function AdvisorScreen() {
       dispatchVoice({
         type: "error",
         message: message.includes("Microphone permission is required")
-          ? "Microphone access is off. To ask FinBot by voice, allow microphone access in your device Settings under SpendWise permissions. You can still type your question."
+          ? "Microphone access is off. To ask FinBot by voice, allow microphone access in your device Settings under SpendWise permissions. You can still type and listen to replies."
           : message || "Unable to start recording. Please try again.",
       });
     } finally {
@@ -1085,7 +1095,7 @@ export default function AdvisorScreen() {
     voiceState.stage === "idle" &&
     !isVoiceActionPending &&
     !isTranscribingVoice &&
-    !isSubmittingRef.current;
+    !isSubmitting;
   const showSuggestions =
     isSessionVerified &&
     voiceState.stage === "idle" &&
@@ -1180,13 +1190,17 @@ export default function AdvisorScreen() {
                 }:${conversationSessionRef.current?.generation ?? ""}:${index}:${message.text}`;
                 const speechStatus =
                   speechUiState.key === speechKey ? speechUiState.state : "idle";
-                const speechDisabled =
-                  isLoading ||
-                  isStreaming ||
-                  isSubmittingRef.current ||
-                  isVoiceActionPending ||
-                  voiceState.stage !== "idle" ||
-                  speechUiState.state === "loading";
+                const speechDisabled = !canPlayAdvisorSpeech({
+                  role: message.role,
+                  text: message.text,
+                  isLoading,
+                  isStreaming,
+                  isSubmitting,
+                  isSessionVerified,
+                  isVoiceActionPending,
+                  voiceStage: voiceState.stage,
+                  isSpeechLoading: speechUiState.state === "loading",
+                });
 
                 return (
                   <View
@@ -1202,21 +1216,19 @@ export default function AdvisorScreen() {
                         padding: 12,
                         borderRadius: 12,
                         marginVertical: 4,
-                        maxWidth: isUser ? "75%" : "80%",
+                        width: isUser ? undefined : "88%",
+                        maxWidth: isUser ? "75%" : "100%",
                         minWidth: 0,
-                        flexShrink: 1,
                         alignSelf: isUser ? "flex-end" : "flex-start",
                       }}
                     >
                       <Text
                         style={{
                           color: isUser ? "#ffffff" : colors.primary,
-                          flexWrap: "wrap",
-                          flexShrink: 1,
-                          lineHeight: 20,
+                          flexShrink: 0,
                         }}
                       >
-                        {message.text}
+                        {isUser ? message.text : formatAdvisorDisplayText(message.text)}
                       </Text>
                       {!isUser && message.text.trim() && !isStreaming ? (
                         <View style={{ marginTop: 6 }}>
@@ -1240,6 +1252,8 @@ export default function AdvisorScreen() {
                               borderWidth: 1,
                               flexDirection: "row",
                               minHeight: 44,
+                              minWidth: 100,
+                              maxWidth: "100%",
                               opacity: speechDisabled ? 0.55 : 1,
                               paddingHorizontal: 10,
                             }}
@@ -1258,7 +1272,7 @@ export default function AdvisorScreen() {
                                 style={{ marginRight: 6 }}
                               />
                             )}
-                            <Text style={{ color: colors.primary, fontSize: 12 }}>
+                            <Text style={{ color: colors.primary, fontSize: 12, flexShrink: 1 }}>
                               {speechStatus === "loading"
                                 ? "Preparing audio…"
                                 : speechStatus === "playing"
@@ -1303,7 +1317,7 @@ export default function AdvisorScreen() {
                             onPress={() => {
                               void submitMessage(question);
                             }}
-                            disabled={isLoading || isStreaming || isSubmittingRef.current}
+                            disabled={isLoading || isStreaming || isSubmitting}
                             style={{
                               backgroundColor: colors.card,
                               borderColor: colors.border,
@@ -1628,7 +1642,8 @@ export default function AdvisorScreen() {
                   isStreaming ||
                   isVoiceActionPending ||
                   (voiceState.stage !== "idle" && !isVoiceRecording) ||
-                  isSubmittingRef.current
+                  isSubmitting ||
+                  !isSessionVerified
                 }
                 className="ml-2 h-10 w-10 items-center justify-center rounded-full"
                 style={{
@@ -1641,13 +1656,14 @@ export default function AdvisorScreen() {
                     isStreaming ||
                     isVoiceActionPending ||
                     (voiceState.stage !== "idle" && !isVoiceRecording) ||
-                    isSubmittingRef.current
+                    isSubmitting ||
+                    !isSessionVerified
                       ? 0.55
                       : 1,
                 }}
                 accessibilityRole="button"
                 accessibilityLabel={isVoiceRecording ? "Stop voice question recording" : "Record a voice question"}
-                accessibilityState={{ disabled: Platform.OS === "web" || isLoading || isStreaming || isVoiceActionPending || (voiceState.stage !== "idle" && !isVoiceRecording) }}
+                accessibilityState={{ disabled: Platform.OS === "web" || isLoading || isStreaming || isVoiceActionPending || (voiceState.stage !== "idle" && !isVoiceRecording) || isSubmitting || !isSessionVerified }}
               >
                 <Ionicons
                   name={isVoiceRecording ? "stop" : "mic"}

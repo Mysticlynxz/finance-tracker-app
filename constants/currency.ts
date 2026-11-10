@@ -71,6 +71,23 @@ export const CURRENCY_NAMES: Record<SupportedCurrency, string> = {
   SAR: "Saudi Riyal",
 };
 
+const CURRENCY_LOCALES: Record<SupportedCurrency, string> = {
+  INR: "en-IN",
+  USD: "en-US",
+  EUR: "en-IE",
+  GBP: "en-GB",
+  JPY: "ja-JP",
+  CNY: "zh-CN",
+  AUD: "en-AU",
+  CAD: "en-CA",
+  CHF: "de-CH",
+  SGD: "en-SG",
+  AED: "en-AE",
+  SAR: "en-SA",
+};
+
+const currencyFormatters = new Map<SupportedCurrency, Intl.NumberFormat>();
+
 const roundCurrencyAmount = (value: number) => {
   if (!Number.isFinite(value)) {
     throw new RangeError("Currency amount must be finite before rounding.");
@@ -151,10 +168,24 @@ export const convertToINR = (amount: number, currency?: string) => {
 
 export const formatCurrencyAmount = (amount: number, currency?: string) => {
   const numericAmount = requireFiniteAmount(amount);
-  const safeAmount = roundCurrencyAmount(numericAmount);
-  const { symbol } = getCurrencyConfig(currency);
-
-  return `${symbol}${safeAmount.toFixed(CURRENCY_DECIMAL_PLACES)}`;
+  const code = normalizeCurrencyCode(currency);
+  const { symbol } = getCurrencyConfig(code);
+  const safeAmount = code === "JPY"
+    ? Math.abs(numericAmount) < 0.5 ? 0 : numericAmount
+    : roundCurrencyAmount(numericAmount);
+  let formatter = currencyFormatters.get(code);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(CURRENCY_LOCALES[code], {
+      style: "currency",
+      currency: code,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: code === "JPY" ? 0 : CURRENCY_DECIMAL_PLACES,
+    });
+    currencyFormatters.set(code, formatter);
+  }
+  return formatter.formatToParts(safeAmount === 0 ? 0 : safeAmount)
+    .map((part) => part.type === "currency" ? symbol : part.value)
+    .join("");
 };
 
 /** Allocate display minor units so category rows reconcile to the converted total. */
@@ -163,15 +194,17 @@ export const allocateCurrencyDisplayAmounts = (
   categoryAmountsInINR: number[],
   currency?: string
 ): number[] => {
+  const normalizedCurrency = normalizeCurrencyCode(currency);
   if (
     !Number.isFinite(totalAmountInINR) ||
-    totalAmountInINR < 0 ||
-    categoryAmountsInINR.some((amount) => !Number.isFinite(amount) || amount < 0)
+    categoryAmountsInINR.some((amount) => !Number.isFinite(amount)) ||
+    (normalizedCurrency !== "JPY" && (
+      totalAmountInINR < 0 || categoryAmountsInINR.some((amount) => amount < 0)
+    ))
   ) {
-    throw new RangeError("Currency allocation requires finite non-negative amounts.");
+    throw new RangeError("Currency allocation requires finite amounts and non-negative amounts for non-JPY currencies.");
   }
 
-  const normalizedCurrency = normalizeCurrencyCode(currency);
   const { rate } = getCurrencyConfig(normalizedCurrency);
   const categoryTotalInINR = compensatedSum(categoryAmountsInINR);
   // Bound tolerance by the representational precision of the actual operands.
@@ -189,6 +222,38 @@ export const allocateCurrencyDisplayAmounts = (
     Math.abs(categoryTotalInINR - totalAmountInINR) > reconciliationTolerance
   ) {
     throw new RangeError("Category INR totals do not reconcile with the monthly INR total.");
+  }
+
+  if (normalizedCurrency === "JPY") {
+    const exactTotal = totalAmountInINR / rate;
+    const target = Math.sign(exactTotal) * Math.round(Math.abs(exactTotal));
+    const exactAmounts = categoryAmountsInINR.map((amount) => amount / rate);
+    const allocated = exactAmounts.map(Math.floor);
+    const baseTotal = allocated.reduce((sum, amount) => sum + amount, 0);
+    if (
+      !Number.isSafeInteger(target) ||
+      allocated.some((amount) => !Number.isSafeInteger(amount)) ||
+      !Number.isSafeInteger(baseTotal)
+    ) {
+      throw new RangeError("Currency allocation exceeds the safe whole-yen range.");
+    }
+    const remainder = target - baseTotal;
+    if (!Number.isSafeInteger(remainder) || remainder < 0 || remainder > allocated.length) {
+      throw new RangeError("Category amounts cannot be reconciled to the displayed total.");
+    }
+    const order = exactAmounts.map((amount, index) => ({
+      index,
+      remainder: amount - allocated[index],
+    })).sort((left, right) => {
+      const difference = right.remainder - left.remainder;
+      return Math.abs(difference) <= MINOR_UNIT_FRACTION_TOLERANCE
+        ? left.index - right.index
+        : difference;
+    });
+    for (let index = 0; index < remainder; index++) {
+      allocated[order[index].index] += 1;
+    }
+    return allocated;
   }
 
   const targetAmount = convertFromINR(totalAmountInINR, normalizedCurrency);

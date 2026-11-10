@@ -17,6 +17,8 @@ import { ExpenseContext } from "../../Context/ExpenseContext";
 import {
   allocateCurrencyDisplayAmounts,
   formatCurrencyAmount,
+  getCurrencyConfig,
+  normalizeCurrencyCode,
 } from "../../constants/currency";
 import { clearBudget, getBudgetRecord, getExpenses, type ExpenseDocument } from "../../lib/appwrite";
 import { syncBudgetForCurrentMonth } from "../../lib/budgetCycle";
@@ -133,6 +135,9 @@ export default function Reports() {
   const remainingBudget = budget === null ? null : Math.max(0, budget - totalExpense);
   const budgetUsagePercentage = budget !== null && budget > 0 ? (totalExpense / budget) * 100 : null;
   const convertedTotalExpense = convertFromINR(totalExpense);
+  const displayedTotalExpense = isCurrencyReady && normalizeCurrencyCode(currency) === "JPY"
+    ? formatCurrencyAmount(totalExpense / getCurrencyConfig(currency).rate, currency)
+    : formatAmount(totalExpense);
   const convertedRemainingBudget = convertFromINR(remainingBudget ?? 0);
 
   const pieData = useMemo(
@@ -196,7 +201,7 @@ export default function Reports() {
   }, [dailyTrendData]);
 
   const formatYAxisTick = (value: number) => {
-    return convertFromINR(value).toFixed(0);
+    return formatAmount(value);
   };
 
   const maxTrendValue = useMemo(
@@ -215,7 +220,7 @@ export default function Reports() {
   const distributionMessage = !hasMonthExpenses && !hasBudget
     ? "No expenses or monthly budget yet. Add expenses or set a budget to get started."
     : hasMonthExpenses && !hasBudget
-      ? `You spent ${formatAmount(totalExpense)} this month. Set a monthly budget to track what remains.`
+      ? `You spent ${displayedTotalExpense} this month. Set a monthly budget to track what remains.`
       : !hasMonthExpenses
         ? "No expenses recorded this month. Your full monthly budget remains."
         : totalExpense > (budget ?? 0)
@@ -277,7 +282,7 @@ export default function Reports() {
           <View className="mb-2 flex-row items-center justify-between">
             <Text style={{ color: colors.secondary }}>Spent This Month</Text>
             <Text className="font-semibold" style={{ color: colors.primary }}>
-              {formatAmount(totalExpense)}
+              {displayedTotalExpense}
             </Text>
           </View>
 
@@ -450,7 +455,7 @@ export default function Reports() {
                     </Text>
                   </View>
                   <Text className="font-semibold" style={{ color: colors.secondary }}>
-                    {formatAmount(totalExpense)}
+                    {displayedTotalExpense}
                   </Text>
                 </View>
 

@@ -12,6 +12,49 @@ import {
 
 const roundToCents = (value) => Math.round(value * 100) / 100;
 
+test("currency display uses selected-currency grouping and keeps meaningful fractional digits", () => {
+  assert.equal(formatCurrencyAmount(50000, "INR"), "₹50,000");
+  assert.equal(formatCurrencyAmount(1234567.89, "INR"), "₹12,34,567.89");
+  assert.equal(formatCurrencyAmount(-1234567.5, "INR"), "-₹12,34,567.5");
+  assert.equal(formatCurrencyAmount(1234567.89, "USD"), "$1,234,567.89");
+  assert.equal(formatCurrencyAmount(1234.5, "EUR"), "€1,234.5");
+  assert.equal(formatCurrencyAmount(1234.56, "JPY"), "¥1,235");
+  assert.equal(formatCurrencyAmount(1234.49, "JPY"), "¥1,234");
+  assert.equal(formatCurrencyAmount(1.495, "JPY"), "¥1");
+  assert.equal(formatCurrencyAmount(-0.49, "JPY"), "¥0");
+  assert.equal(formatCurrencyAmount(-1234.5, "JPY"), "-¥1,235");
+  assert.equal(formatCurrencyAmount(1234, "INR"), "₹1,234");
+  assert.equal(formatCurrencyAmount(1234.50, "INR"), "₹1,234.5");
+  assert.equal(formatCurrencyAmount(1234.01, "INR"), "₹1,234.01");
+  assert.equal(formatCurrencyAmount(1234.50, "USD"), "$1,234.5");
+  assert.equal(formatCurrencyAmount(1234.01, "USD"), "$1,234.01");
+  assert.equal(formatCurrencyAmount(1234567.89, "CHF"), "CHF\u00a01'234'567.89");
+  assert.equal(formatCurrencyAmount(0, "INR"), "₹0");
+  assert.equal(formatCurrencyAmount(50000, "inr"), "₹50,000");
+  assert.equal(formatCurrencyAmount(50000, "unknown"), "₹50,000");
+});
+
+test("configured currency symbols are retained with locale-aware grouping", () => {
+  for (const [currency, expected] of [
+    ["AUD", "A$1,234,567.89"],
+    ["CAD", "C$1,234,567.89"],
+    ["SGD", "S$1,234,567.89"],
+    ["AED", "د.إ\u00a01,234,567.89"],
+    ["SAR", "﷼\u00a01,234,567.89"],
+  ]) {
+    assert.equal(formatCurrencyAmount(1234567.89, currency), expected, currency);
+    assert.ok(formatCurrencyAmount(-1234567.89, currency).includes(CURRENCY_CONFIG[currency].symbol), currency);
+  }
+});
+
+test("all supported currencies display using their minor-unit precision", () => {
+  for (const currency of SUPPORTED_CURRENCIES) {
+    const expected = currency === "JPY" ? 123456800 : 123456789;
+    assert.equal(displayedMinorUnits(1234567.89, currency), expected, currency);
+    assert.equal(displayedMinorUnits(-1234567.89, currency), -expected, currency);
+  }
+});
+
 test("currency conversions are finite and correct for every configured currency", () => {
   for (const code of SUPPORTED_CURRENCIES) {
     const { rate, symbol } = CURRENCY_CONFIG[code];
@@ -30,7 +73,7 @@ test("currency conversions are finite and correct for every configured currency"
 
 const displayedMinorUnits = (amount, currency) => {
   const formatted = formatCurrencyAmount(amount, currency);
-  const numeric = Number(formatted.replace(/[^0-9.-]/g, ""));
+  const numeric = Number(formatted.replace(CURRENCY_CONFIG[currency].symbol, "").replace(/[^0-9.-]/g, ""));
   return Math.round(numeric * 100);
 };
 
@@ -99,7 +142,7 @@ test("larger minor-unit values do not widen local remainder comparisons", () => 
   assert.equal(allocated[1], 0.01);
 });
 
-test("category display amounts reconcile to the rounded total in every configured currency", () => {
+test("category display amounts reconcile to the displayed total in every configured currency", () => {
   const categoryAmounts = [1, 37, 81, 205.45, 902.13];
   const total = categoryAmounts.reduce((sum, amount) => sum + amount, 0);
   for (const currency of SUPPORTED_CURRENCIES) {
@@ -108,11 +151,12 @@ test("category display amounts reconcile to the rounded total in every configure
       (sum, amount) => sum + displayedMinorUnits(amount, currency),
       0
     );
-    assert.equal(categorySumMinor, displayedMinorUnits(convertFromINR(total, currency), currency), currency);
+    const displayedTotal = currency === "JPY" ? total / CURRENCY_CONFIG.JPY.rate : convertFromINR(total, currency);
+    assert.equal(categorySumMinor, displayedMinorUnits(displayedTotal, currency), currency);
   }
 });
 
-test("sub-cent category allocations reconcile across all configured currencies", () => {
+test("sub-cent category allocations reconcile to the displayed total in every currency", () => {
   const categoryAmounts = [0.005, 0.005, 0.005, 0.005];
   const total = categoryAmounts.reduce((sum, amount) => sum + amount, 0);
   for (const currency of SUPPORTED_CURRENCIES) {
@@ -121,8 +165,56 @@ test("sub-cent category allocations reconcile across all configured currencies",
       (sum, amount) => sum + displayedMinorUnits(amount, currency),
       0
     );
-    assert.equal(categorySumMinor, displayedMinorUnits(convertFromINR(total, currency), currency), currency);
+    const displayedTotal = currency === "JPY" ? total / CURRENCY_CONFIG.JPY.rate : convertFromINR(total, currency);
+    assert.equal(categorySumMinor, displayedMinorUnits(displayedTotal, currency), currency);
   }
+});
+
+test("whole-yen allocation distributes three equal fractional categories in original order", () => {
+  const amounts = [0.22, 0.22, 0.22];
+  const allocated = allocateCurrencyDisplayAmounts(0.66, amounts, "JPY");
+  assert.deepEqual(allocated, [1, 0, 0]);
+  assert.deepEqual(allocated.map((amount) => formatCurrencyAmount(amount, "JPY")), ["¥1", "¥0", "¥0"]);
+  assert.equal(formatCurrencyAmount(0.66 / CURRENCY_CONFIG.JPY.rate, "JPY"), "¥1");
+  assert.deepEqual(amounts, [0.22, 0.22, 0.22]);
+});
+
+test("whole-yen allocation uses largest remainders and handles whole and zero values", () => {
+  const rate = CURRENCY_CONFIG.JPY.rate;
+  assert.deepEqual(allocateCurrencyDisplayAmounts(2.4 * rate, [0.1 * rate, 0.8 * rate, 1.5 * rate], "JPY"), [0, 1, 1]);
+  assert.deepEqual(allocateCurrencyDisplayAmounts(3 * rate, [1 * rate, 2 * rate, 0], "JPY"), [1, 2, 0]);
+  assert.deepEqual(allocateCurrencyDisplayAmounts(0, [0, 0], "JPY"), [0, 0]);
+  assert.deepEqual(allocateCurrencyDisplayAmounts(0, [], "JPY"), []);
+});
+
+test("JPY allocation and total use unrounded conversions, avoiding double rounding", () => {
+  const rate = CURRENCY_CONFIG.JPY.rate;
+  const total = 0.499 * rate;
+  assert.equal(convertFromINR(total, "JPY"), 0.5);
+  assert.equal(formatCurrencyAmount(total / rate, "JPY"), "¥0");
+  assert.deepEqual(allocateCurrencyDisplayAmounts(total, [total], "JPY"), [0]);
+});
+
+test("whole-yen allocation safely handles legacy signed category amounts", () => {
+  const rate = CURRENCY_CONFIG.JPY.rate;
+  for (const [amounts, expected] of [
+    [[1.4, -0.4], [1, 0]],
+    [[2.2, -1.6, 0], [2, -1, 0]],
+    [[-1.4, 0.4], [-1, 0]],
+    [[-0.6, -0.6], [0, -1]],
+  ]) {
+    const inr = amounts.map((amount) => amount * rate);
+    const total = inr.reduce((sum, amount) => sum + amount, 0);
+    const allocated = allocateCurrencyDisplayAmounts(total, inr, "JPY");
+    assert.deepEqual(allocated, expected);
+    assert.equal(allocated.reduce((sum, amount) => sum + amount, 0) * 100, displayedMinorUnits(total / rate, "JPY"));
+    for (let index = 0; index < amounts.length; index++) {
+      if (amounts[index] < 0) assert.ok(allocated[index] <= 0);
+      if (amounts[index] > 0) assert.ok(allocated[index] >= 0);
+      if (amounts[index] === 0) assert.equal(allocated[index], 0);
+    }
+  }
+  assert.throws(() => allocateCurrencyDisplayAmounts(0.55, [1.1, -0.55], "USD"), /non-negative/);
 });
 
 test("INR conversion is an identity at ordinary and extreme finite magnitudes", () => {

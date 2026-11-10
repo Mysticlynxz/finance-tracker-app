@@ -2,7 +2,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 import { ExpenseContext } from "../../Context/ExpenseContext";
-import { CURRENCY_CONFIG, normalizeCurrencyCode } from "../../constants/currency";
+import { formatCurrencyAmount } from "../../constants/currency";
 import { DEFAULT_CATEGORIES, type CategoryOption } from "../../constants/categories";
 import { router } from "expo-router";
 import { Alert, Animated, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -187,11 +187,10 @@ export default function Budget() {
       };
 
   const numericBudget = Number(budget) || 0;
-  const currencySymbol = isCurrencyReady
-    ? CURRENCY_CONFIG[normalizeCurrencyCode(currency)].symbol
-    : null;
   const formatSelectedAmount = (amount: number) =>
-    currencySymbol ? `${currencySymbol}${amount.toFixed(2)}` : "Loading currency…";
+    !isCurrencyReady ? "Loading currency…" : Number.isFinite(amount)
+      ? formatCurrencyAmount(amount, currency)
+      : "Invalid amount";
   const hasInput = budget.trim().length > 0;
   const hasSavedBudget = savedBudgetInINR > 0;
   const now = new Date();
@@ -459,7 +458,7 @@ export default function Budget() {
                       className="text-sm font-semibold"
                       style={{ color: isSelected ? "#ffffff" : colors.primary }}
                     >
-                      {currencySymbol ? `${currencySymbol}${option.toLocaleString()}` : "Loading currency…"}
+                      {formatSelectedAmount(option)}
                     </Text>
                   </Pressable>
                 );
@@ -493,7 +492,7 @@ export default function Budget() {
 
           <Text className="mt-3 text-sm" style={{ color: colors.secondary }}>
             {isCurrencyReady
-              ? `${currencySymbol}${spentAmount.toFixed(2)} spent / ${currencySymbol}${numericBudget.toFixed(2)}`
+              ? `${formatSelectedAmount(spentAmount)} spent / ${formatSelectedAmount(numericBudget)}`
               : "Loading currency…"}
           </Text>
 
@@ -515,7 +514,7 @@ export default function Budget() {
 
           <View className="mt-4">
             <Text className="text-base font-semibold" style={{ color: colors.primary }}>
-              Remaining: {isCurrencyReady ? `${currencySymbol}${remainingDisplayAmount.toFixed(2)}` : "Loading currency…"}
+              Remaining: {formatSelectedAmount(remainingDisplayAmount)}
             </Text>
             <Text className="mt-2 text-sm font-semibold" style={{ color: healthColor }}>
               {numericBudget > 0 ? `${health} spending` : "Set a budget to see spending status"}
@@ -539,7 +538,7 @@ export default function Budget() {
             ) : null}
 
             <Text className="mt-3 text-sm" style={{ color: colors.secondary }}>
-              {isCurrencyReady ? `📊 Last month: ${currencySymbol}${lastMonthSpending.toFixed(2)}` : "Loading currency…"}
+              {isCurrencyReady ? `📊 Last month: ${formatSelectedAmount(lastMonthSpending)}` : "Loading currency…"}
             </Text>
           </View>
 
@@ -560,7 +559,7 @@ export default function Budget() {
                   style={{ color: colors.secondary }}
                 >
                   {isCurrencyReady
-                    ? `${category.name} — ${currencySymbol}${category.amount.toFixed(2)}`
+                    ? `${category.name} — ${formatSelectedAmount(category.amount)}`
                     : `${category.name} — Loading currency…`}
                 </Text>
               ))

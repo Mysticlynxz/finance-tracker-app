@@ -522,7 +522,7 @@ export default function SettingsScreen() {
           <View className="mb-2 flex-row items-center justify-between">
             <Text style={{ color: colors.secondary }}>App Name</Text>
             <Text className="font-semibold" style={{ color: colors.primary }}>
-              Smart Finance Tracker
+              SpendWise
             </Text>
           </View>
           <View className="flex-row items-center justify-between">
