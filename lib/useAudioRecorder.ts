@@ -48,7 +48,7 @@ export function useAudioRecorder(onUnmountRecording?: (audioUri: string | null) 
 
   const startRecording = async () => {
     if (Platform.OS === "web") {
-      throw new Error("Voice expense capture is supported in the SpendWise mobile app.");
+      throw new Error("Voice expense capture is supported in the Vittiqo mobile app.");
     }
 
     if (isStoppingRef.current) {

@@ -377,7 +377,7 @@ export default function VoiceInputScreen() {
               Voice capture is mobile-only
             </Text>
             <Text className="mt-3 text-center text-base" style={{ color: colors.secondary }}>
-              Voice expense capture is supported in the SpendWise mobile app on Android and iOS.
+              Voice expense capture is supported in the Vittiqo mobile app on Android and iOS.
             </Text>
             <Pressable
               onPress={() => router.replace("/home")}

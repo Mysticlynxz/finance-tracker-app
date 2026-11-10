@@ -1077,7 +1077,7 @@ export default function AdvisorScreen() {
       dispatchVoice({
         type: "error",
         message: message.includes("Microphone permission is required")
-          ? "Microphone access is off. To ask FinBot by voice, allow microphone access in your device Settings under SpendWise permissions. You can still type and listen to replies."
+          ? "Microphone access is off. To ask FinBot by voice, allow microphone access in your device Settings under Vittiqo permissions. You can still type and listen to replies."
           : message || "Unable to start recording. Please try again.",
       });
     } finally {

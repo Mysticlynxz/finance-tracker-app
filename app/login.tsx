@@ -1,6 +1,6 @@
 import { Link, router } from "expo-router";
 import { useState } from "react";
-import { Alert, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { loginUser } from "../lib/appwrite";
 
@@ -28,7 +28,22 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-white px-6 py-8">
-      <View className="mt-10 gap-4">
+      <ScrollView className="mt-10" contentContainerStyle={{ gap: 16 }} keyboardShouldPersistTaps="handled">
+        <View className="items-center">
+          <Image
+            source={require("../assets/branding/vittiqo-kolam-v-transparent.png")}
+            style={{ width: 100, height: 100 }}
+            resizeMode="contain"
+            accessible={false}
+          />
+          <Text className="text-2xl font-bold" style={{ color: "#101D35" }} accessibilityRole="header">
+            VITTIQO
+          </Text>
+          <Text className="text-center text-sm" style={{ color: "#101D35" }}>
+            Your money. Your language. Your intelligence.
+          </Text>
+          <View accessibilityElementsHidden importantForAccessibility="no" style={{ width: 32, height: 3, marginTop: 8, backgroundColor: "#E6A52E" }} />
+        </View>
         <Text className="text-2xl font-bold text-slate-900">Login</Text>
 
         <TextInput
@@ -51,14 +66,14 @@ export default function LoginScreen() {
           autoCorrect={false}
         />
 
-        <Pressable onPress={() => void handleSubmit()} className="rounded-lg bg-blue-600 py-3">
+        <Pressable onPress={() => void handleSubmit()} className="rounded-lg py-3" style={{ backgroundColor: "#101D35" }}>
           <Text className="text-center font-semibold text-white">Sign In</Text>
         </Pressable>
 
-        <Link href="/register" className="text-center text-blue-600">
+        <Link href="/register" className="text-center" style={{ color: "#168F83", fontSize: 19, fontWeight: "700", textDecorationLine: "underline" }}>
           {"Don't have an account? Register"}
         </Link>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }

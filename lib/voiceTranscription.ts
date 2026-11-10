@@ -116,7 +116,7 @@ export interface VoiceTranscriptionResponse {
 
 export const uploadVoiceRecording = async (audioUri: string): Promise<string> => {
   if (Platform.OS === "web") {
-    throw new Error("Voice expense capture is supported in the SpendWise mobile app.");
+    throw new Error("Voice expense capture is supported in the Vittiqo mobile app.");
   }
 
   const uri = audioUri.trim();

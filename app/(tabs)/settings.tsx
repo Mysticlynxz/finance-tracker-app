@@ -177,8 +177,8 @@ export default function SettingsScreen() {
         const message = permission.canAskAgain
           ? "Allow notification permission to receive Budget Alerts. The setting will stay off until permission is granted."
           : Platform.OS === "android"
-            ? "Notifications are blocked. Open Android Settings, choose SpendWise, then allow Notifications. The setting will stay off until permission is granted."
-            : "Notifications are blocked for SpendWise in system settings. Allow them there, then try again.";
+            ? "Notifications are blocked. Open Android Settings, choose Vittiqo, then allow Notifications. The setting will stay off until permission is granted."
+            : "Notifications are blocked for Vittiqo in system settings. Allow them there, then try again.";
         Alert.alert(
           "Notifications not enabled",
           message,
@@ -522,7 +522,7 @@ export default function SettingsScreen() {
           <View className="mb-2 flex-row items-center justify-between">
             <Text style={{ color: colors.secondary }}>App Name</Text>
             <Text className="font-semibold" style={{ color: colors.primary }}>
-              SpendWise
+              Vittiqo
             </Text>
           </View>
           <View className="flex-row items-center justify-between">

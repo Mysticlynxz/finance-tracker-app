@@ -1,17 +1,17 @@
 {
   "expo": {
-    "name": "SpendWise",
+    "name": "Vittiqo",
     "slug": "spendwise",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/branding/vittiqo-app-icon-1024.png",
     "scheme": "spendwise",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/icon.png",
+      "image": "./assets/branding/vittiqo-logo-transparent.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#F7F5ED"
     },
     "ios": {
       "supportsTablet": true
@@ -23,15 +23,15 @@
         "android.permission.POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/branding/vittiqo-kolam-v-transparent.png",
+        "backgroundColor": "#F7F5ED"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/branding/vittiqo-app-icon-1024.png"
     },
     "plugins": [
       "expo-router",
@@ -44,10 +44,19 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/icon.png",
-          "imageWidth": 200,
+          "image": "./assets/branding/vittiqo-logo-transparent.png",
+          "imageWidth": 260,
+          "android": {
+            "image": "./assets/branding/vittiqo-kolam-v-transparent.png",
+            "backgroundColor": "#F7F5ED",
+            "imageWidth": 135
+          },
+          "ios": {
+            "image": "./assets/branding/vittiqo-logo-transparent.png",
+            "imageWidth": 260
+          },
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#F7F5ED"
         }
       ],
       [
