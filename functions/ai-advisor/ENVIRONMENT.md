@@ -52,10 +52,16 @@ FinBot speech uses the same server-side `GNANI_API_KEY` with Timbre v3.0 via
 `POST https://api.vachana.ai/api/v1/tts/inference`. The existing key must also
 have Gnani TTS service permission; matching the Prisma header does not prove
 TTS entitlement. The function fixes the voice to Shivani, language to `auto`,
-and MP3 output, and accepts at most 500 characters. It rejects generated audio
+and MP3 output, and accepts at most 500 JavaScript UTF-16 code units per request.
+The advisor prepares long replies as sentence-aware segments and requests them
+sequentially; it reports an error instead of truncating an overlong unbreakable
+passage or a reply exceeding 20 segments. The function rejects generated audio
 larger than 512 KiB before returning Base64 through synchronous Appwrite
 execution. Do not retry scope-denial responses automatically; enable TTS
 permission for the existing key in Gnani when access is denied.
+The function validates the response status, MIME type and MP3 signature; it
+does not log the speech text, audio or credentials. Client and function changes
+must both be deployed before testing the updated flow.
 
 The local Appwrite CLI manifest targets the Appwrite `node-22` runtime.
 Voice transcription uses Node 22's built-in `fetch`, `FormData`, `Blob`, and

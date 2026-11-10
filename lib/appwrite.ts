@@ -617,6 +617,7 @@ export class AdvisorSessionChangedError extends Error {
 
 export const MAX_ADVISOR_SPEECH_AUDIO_BYTES = 512 * 1024;
 const MAX_ADVISOR_SPEECH_TEXT_LENGTH = 500;
+const MAX_ADVISOR_SPEECH_CHUNKS = 20;
 const MAX_ADVISOR_SPEECH_BASE64_LENGTH =
   Math.ceil(MAX_ADVISOR_SPEECH_AUDIO_BYTES / 3) * 4;
 
@@ -705,13 +706,48 @@ const sameAdvisorSession = (left: AuthSessionIdentity, right: AuthSessionIdentit
   left.sessionId === right.sessionId &&
   left.generation === right.generation;
 
+export const splitAdvisorSpeechText = (text: string): string[] => {
+  const spoken = text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^[ \t]*#{1,6}\s+/gm, "")
+    .replace(/^[ \t]*[-*+]\s+/gm, "")
+    .replace(/(\*\*|__|~~|`)/g, "")
+    .trim();
+  if (!spoken) throw new Error("There is no text to speak.");
+
+  const chunks: string[] = [];
+  let remaining = spoken;
+  while (remaining.length > MAX_ADVISOR_SPEECH_TEXT_LENGTH) {
+    const window = remaining.slice(0, MAX_ADVISOR_SPEECH_TEXT_LENGTH + 1);
+    const sentenceEnd = [...window.matchAll(/[.!?।]\s+|\n+/g)]
+      .map((match) => (match.index ?? 0) + match[0].length)
+      .filter((index) => index <= MAX_ADVISOR_SPEECH_TEXT_LENGTH)
+      .pop();
+    const whitespace = window.slice(0, MAX_ADVISOR_SPEECH_TEXT_LENGTH + 1).search(/\s+\S*$/);
+    const cut = sentenceEnd || whitespace;
+    if (cut <= 0) {
+      throw new Error("This response contains a passage too long to speak. Please ask for a shorter answer.");
+    }
+    chunks.push(remaining.slice(0, cut).trim());
+    remaining = remaining.slice(cut).trimStart();
+    if (chunks.length >= MAX_ADVISOR_SPEECH_CHUNKS) {
+      throw new Error("This response is too long to speak. Please ask for a shorter answer.");
+    }
+  }
+  if (remaining.trim()) chunks.push(remaining.trim());
+  return chunks;
+};
+
 export const requestAdvisorSpeech = async (
   text: string,
   expectedSession?: AuthSessionIdentity
 ): Promise<AdvisorSpeechAudio> => {
   const assistantText = text.trim();
-  if (!assistantText || assistantText.length > MAX_ADVISOR_SPEECH_TEXT_LENGTH) {
-    throw new Error("This response cannot be spoken.");
+  if (!assistantText) {
+    throw new Error("There is no text to speak.");
+  }
+  if (assistantText.length > MAX_ADVISOR_SPEECH_TEXT_LENGTH) {
+    throw new Error("This speech segment is too long.");
   }
 
   const sessionIdentity = await captureAuthSessionIdentity();
@@ -756,21 +792,34 @@ export const requestAdvisorSpeech = async (
   if ((execution.responseBody || "").length > MAX_ADVISOR_SPEECH_BASE64_LENGTH + 512) {
     throw new Error("FinBot returned audio that is too large.");
   }
-  let response: Record<string, unknown>;
+  let response: unknown;
   try {
-    response = JSON.parse(execution.responseBody || "") as Record<string, unknown>;
+    response = JSON.parse(execution.responseBody || "") as unknown;
   } catch {
     throw new Error("FinBot returned an invalid audio response.");
   }
-  if (response.mimeType !== "audio/mpeg" || typeof response.audioBase64 !== "string") {
-    throw new Error("FinBot returned an unsupported audio response.");
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new Error("FinBot returned an invalid audio response.");
+  }
+  const speechResponse = response as Record<string, unknown>;
+  if (speechResponse.mimeType !== "audio/mpeg" || typeof speechResponse.audioBase64 !== "string") {
+    console.warn("[FinBot TTS] Unexpected function response", {
+      hasReply: typeof speechResponse.reply === "string",
+      hasError: typeof speechResponse.error === "string",
+      mimeType: typeof speechResponse.mimeType === "string" ? speechResponse.mimeType.slice(0, 80) : null,
+      hasAudio: typeof speechResponse.audioBase64 === "string",
+    });
+    if (typeof speechResponse.reply === "string" && !speechResponse.audioBase64) {
+      throw new Error("The deployed FinBot function did not return speech audio. Its TTS implementation may need deployment.");
+    }
+    throw new Error("FinBot returned an unexpected speech response. Check the function deployment and logs.");
   }
 
-  const byteLength = getBase64ByteLength(response.audioBase64);
+  const byteLength = getBase64ByteLength(speechResponse.audioBase64);
   if (
     byteLength === null ||
-    !Number.isSafeInteger(response.byteLength) ||
-    response.byteLength !== byteLength
+    !Number.isSafeInteger(speechResponse.byteLength) ||
+    speechResponse.byteLength !== byteLength
   ) {
     throw new Error("FinBot returned an invalid audio response.");
   }
@@ -782,7 +831,7 @@ export const requestAdvisorSpeech = async (
   }
 
   return {
-    audioBase64: response.audioBase64,
+    audioBase64: speechResponse.audioBase64,
     mimeType: "audio/mpeg",
     byteLength,
   };

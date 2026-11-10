@@ -428,10 +428,10 @@ test("advisor speech uses an authenticated synchronous Function request and vali
 test("advisor speech rejects invalid, unsuccessful, malformed, and stale responses", async () => {
   const client = createAdvisorClient();
   const session = await client.api.captureAuthSessionIdentity();
-  await assert.rejects(client.api.requestAdvisorSpeech(" \n ", session), /cannot be spoken/);
+  await assert.rejects(client.api.requestAdvisorSpeech(" \n ", session), /no text to speak/);
   await assert.rejects(
     client.api.requestAdvisorSpeech("x".repeat(501), session),
-    /cannot be spoken/
+    /segment is too long/
   );
   await assert.rejects(
     client.api.requestAdvisorSpeech("Reply", {
@@ -504,7 +504,29 @@ test("advisor speech rejects invalid, unsuccessful, malformed, and stale respons
       }),
     };
   });
+
   await assert.rejects(client.api.requestAdvisorSpeech("Reply", session), {
     name: "AdvisorSessionChangedError",
   });
+});
+
+test("splits long Malayalam and Markdown into bounded spoken segments without losing words", () => {
+  const client = createAdvisorClient();
+  const sentence = "നിങ്ങളുടെ ചെലവ് ബജറ്റിനുള്ളിലാണ്.";
+  const text = `## ഉപദേശം\n**${sentence}**\n${(sentence + " ").repeat(45)}`;
+  const segments = client.api.splitAdvisorSpeechText(text);
+  assert.ok(segments.length > 1);
+  assert.ok(segments.every((part) => part.length <= 500));
+  assert.equal(segments.join(" ").split(sentence).length - 1, 46);
+  assert.equal(segments.join(" ").includes("**"), false);
+  assert.throws(() => client.api.splitAdvisorSpeechText("x".repeat(501)), /passage too long/);
+});
+
+test("distinguishes an outdated function reply from audio", async () => {
+  const client = createAdvisorClient();
+  client.setExecute(async () => ({
+    status: "completed", responseStatusCode: 200,
+    responseBody: JSON.stringify({ reply: "Function working" }),
+  }));
+  await assert.rejects(client.api.requestAdvisorSpeech("Hello"), /may need deployment/);
 });

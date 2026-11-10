@@ -1,4 +1,5 @@
 import { Account, Client, Databases, Permission, Query, Role, Storage } from "appwrite";
+import { isValidMp3 } from "./mp3Validation.js";
 
 const AI_ADVISOR_FALLBACK =
   "I'm having trouble right now, but hey \u2014 tracking expenses already puts you ahead of most people \u{1F604}";
@@ -885,7 +886,8 @@ const getTextToSpeechResponse = async ({ req, body, log }) => {
 
   const apiKey = process.env.GNANI_API_KEY?.trim();
   if (!apiKey) {
-    return { status: 503, payload: { error: "FinBot voice is temporarily unavailable." } };
+    log(JSON.stringify({ event: "advisor_tts", stage: "configuration.missing_key" }));
+    return { status: 503, payload: { error: "FinBot voice is not configured. The server is missing its Gnani API key." } };
   }
 
   let response;
@@ -931,6 +933,7 @@ const getTextToSpeechResponse = async ({ req, body, log }) => {
 
   if (!response.ok) {
     const status = response.status;
+    log(JSON.stringify({ event: "advisor_tts", stage: "provider.rejected", httpStatus: status }));
     await cancelResponseBody(response);
     if (status === 401) {
       return { status: 502, payload: { error: "Gnani TTS authentication failed." } };
@@ -950,17 +953,33 @@ const getTextToSpeechResponse = async ({ req, body, log }) => {
         payload: { error: "FinBot voice is busy. Please wait a moment before trying again." },
       };
     }
+    if (status === 400 || status === 422) {
+      return {
+        status: 502,
+        payload: { error: "Gnani rejected the speech request. Check the configured model, voice, and audio settings." },
+      };
+    }
     return { status: 502, payload: { error: "Gnani could not generate this audio response." } };
   }
 
   const mimeType = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
   if (mimeType !== "audio/mpeg") {
+    log(JSON.stringify({
+      event: "advisor_tts",
+      stage: "provider.unexpected_content_type",
+      httpStatus: response.status,
+      contentType: mimeType?.slice(0, 80) ?? null,
+    }));
     await cancelResponseBody(response);
     return { status: 502, payload: { error: "Gnani returned an unsupported audio format." } };
   }
 
   try {
     const audio = await readTtsAudio(response);
+    if (!isValidMp3(audio)) {
+      log(JSON.stringify({ event: "advisor_tts", stage: "provider.invalid_mp3" }));
+      return { status: 502, payload: { error: "Gnani returned invalid MP3 audio." } };
+    }
     log(JSON.stringify({
       event: "advisor_tts",
       stage: "provider.response_received",

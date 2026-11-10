@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { invalidMp3Cases, metadataMp3Cases, silentMp3, taggedSilentMp3, validMp3Cases } from "../../../tests/fixtures/ttsMp3Cases.mjs";
 
 process.env.APPWRITE_FUNCTION_API_ENDPOINT = "https://appwrite.test/v1";
 process.env.APPWRITE_FUNCTION_PROJECT_ID = "test-project";
@@ -16,7 +17,7 @@ afterEach(() => {
   process.env.GNANI_API_KEY = originalGnaniKey;
 });
 
-const callHandler = async (body, { accountId = userId, headers = {}, method = "POST" } = {}) => {
+const callHandler = async (body, { accountId = userId, headers = {}, method = "POST", audio = silentMp3 } = {}) => {
   const calls = [];
   const logs = [];
   const errors = [];
@@ -26,7 +27,7 @@ const callHandler = async (body, { accountId = userId, headers = {}, method = "P
       return Response.json({ $id: accountId });
     }
     calls.push({ url, options });
-    return new Response(Uint8Array.from([1, 2, 3]), {
+    return new Response(audio, {
       status: 200,
       headers: { "content-type": "audio/mpeg" },
     });
@@ -66,8 +67,8 @@ test("generates binary MP3 with the fixed Timbre v3.0 request", async () => {
   const providerRequest = result.calls[0];
   assert.equal(result.status, 200);
   assert.equal(result.payload.mimeType, "audio/mpeg");
-  assert.equal(result.payload.audioBase64, Buffer.from([1, 2, 3]).toString("base64"));
-  assert.equal(result.payload.byteLength, 3);
+  assert.equal(result.payload.audioBase64, silentMp3.toString("base64"));
+  assert.equal(result.payload.byteLength, silentMp3.length);
   assert.equal(providerRequest.url, "https://api.vachana.ai/api/v1/tts/inference");
   assert.equal(providerRequest.options.method, "POST");
   assert.equal(providerRequest.options.headers["X-API-Key-ID"], "test-gnani-key");
@@ -85,6 +86,29 @@ test("generates binary MP3 with the fixed Timbre v3.0 request", async () => {
   assert.deepEqual(result.errors, []);
 });
 
+test("validates MP3 frame boundaries with and without ID3 metadata", async () => {
+  for (const audio of validMp3Cases) {
+    const result = await callHandler(validRequest(), { audio });
+    assert.equal(result.status, 200);
+    assert.equal(result.payload.audioBase64, audio.toString("base64"));
+  }
+  for (const [label, audio] of invalidMp3Cases) {
+    const result = await callHandler(validRequest(), { audio });
+    assert.equal(result.status, 502, label);
+    assert.equal(result.payload.audioBase64, undefined, label);
+  }
+});
+
+test("accepts each supported ID3 variant and rejects its truncated MPEG frames", async () => {
+  for (const [label, audio] of metadataMp3Cases) {
+    const result = await callHandler(validRequest(), { audio });
+    assert.equal(result.status, 200, label);
+    assert.equal(result.payload.audioBase64, audio.toString("base64"), label);
+    const truncated = await callHandler(validRequest(), { audio: audio.subarray(0, -1) });
+    assert.equal(truncated.status, 502, label);
+  }
+});
+
 test("preserves representative multilingual and INR response text in mocked requests", async () => {
   const phrases = [
     "Your balance is ₹1,234.50.",
@@ -98,7 +122,7 @@ test("preserves representative multilingual and INR response text in mocked requ
     const url = typeof input === "string" ? input : input.url;
     if (url.endsWith("/account")) return Response.json({ $id: userId });
     sentTexts.push(JSON.parse(options.body).text);
-    return new Response(Uint8Array.from([1]), {
+    return new Response(taggedSilentMp3, {
       headers: { "content-type": "audio/mpeg" },
     });
   };
@@ -256,6 +280,7 @@ test("maps provider authentication, throttling, timeout, and network failures sa
 test("rejects unexpected MIME, empty audio, and oversized audio", async () => {
   for (const response of [
     new Response("not audio", { headers: { "content-type": "application/json" } }),
+    new Response('{"error":"not audio"}', { headers: { "content-type": "audio/mpeg" } }),
     new Response(null, { headers: { "content-type": "audio/mpeg" } }),
     new Response(new Uint8Array(512 * 1024 + 1), {
       headers: { "content-type": "audio/mpeg" },
