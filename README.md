@@ -1,50 +1,100 @@
-# Welcome to your Expo app 👋
+# VITTIQO
+### Your money. Your language. Your intelligence.
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+<p align="center">
+  <strong>A Multilingual AI-Powered Personal Finance Assistant</strong>
+</p>
 
-## Get started
+Vittiqo is a mobile personal finance application designed to make everyday expense management more accessible through voice interaction, AI-powered expense extraction and personalised financial insights.
 
-1. Install dependencies
+It allows users to record expenses manually or describe transactions naturally through speech, review extracted details, monitor budgets and understand their spending patterns.
 
-   ```bash
-   npm install
-   ```
+## Project Pitch
 
-2. Start the app
+📄 **[Read the One-Page Vittiqo Project Pitch](docs/Vittiqo_Project_Pitch.pdf)**
 
-   ```bash
-   npx expo start
-   ```
+## Key Features
 
-In the output, you'll find options to open the app in a
+- **Voice Expense Entry:** Record expenses using natural speech.
+- **Multilingual Interaction:** Integrates Gnani Prisma and Timbre, whose published model capabilities cover 10+ Indian/Indic languages.
+- **AI Expense Extraction:** Uses Google Gemini to identify transaction amounts, categories and dates from natural-language descriptions.
+- **FinBot AI Assistant:** Provides conversational assistance and contextual financial insights.
+- **Text-to-Speech:** Listen to generated financial responses using Gnani Timbre.
+- **Expense Management:** Add, organise and review transactions.
+- **Budget Tracking:** Set budgets and monitor category-wise spending.
+- **Reports and Analytics:** Visualise spending patterns and financial activity.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## Technology Stack
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+| Technology | Purpose |
+|---|---|
+| React Native | Mobile application framework |
+| Expo SDK 54 | Application development and builds |
+| TypeScript | Application implementation |
+| Appwrite | Authentication, database, storage and backend functions |
+| Gnani Prisma | Speech-to-text |
+| Gnani Timbre | Text-to-speech |
+| Google Gemini | Natural-language processing and financial assistance |
 
-## Get a fresh project
+## Voice Expense Workflow
 
-When you're ready, run:
+1. The user records an expense description.
+2. The audio is uploaded to Appwrite Storage.
+3. An Appwrite Function sends the recording to Gnani Prisma for transcription.
+4. Gemini extracts structured expense information from the transcript.
+5. The user reviews the extracted details.
+6. The confirmed expense is saved to the user's account.
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js
+- npm
+- Expo-compatible development environment
+- An Appwrite project
+
+### Installation
+
+Clone the repository:
 
 ```bash
-npm run reset-project
+git clone https://github.com/Mysticlynxz/finance-tracker-app.git
+cd finance-tracker-app
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Install dependencies:
 
-## Learn more
+```bash
+npm install
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+Configure the required environment variables using `.env.example`.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Start the Expo development server:
 
-## Join the community
+```bash
+npx expo start
+```
 
-Join our community of developers creating universal apps.
+## Environment and Security
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Vittiqo uses public Appwrite configuration values in the mobile application and protected credentials in its backend Functions.
+
+Provider API keys, including `GNANI_API_KEY` and `GEMINI_API_KEY`, must remain server-side and must never be embedded in the mobile application.
+
+Never commit populated `.env` files or private API credentials.
+
+## Project Repository
+
+**GitHub:** https://github.com/Mysticlynxz/finance-tracker-app
+
+## Development
+
+Vittiqo was developed with AI-assisted programming tools for implementation support, debugging and testing. Product decisions, integration choices and application verification form part of the project development process.
+
+---
+
+**VITTIQO**
+
+*Your money. Your language. Your intelligence.*
